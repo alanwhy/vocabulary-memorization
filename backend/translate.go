@@ -11,28 +11,29 @@ import (
 	"time"
 )
 
-// translateResult 翻译结果
+// translateResult 翻译结果，一个单词可能有多个词性，每个词性对应一条 Sense
 type translateResult struct {
-	Translation string
-	Pos         string
-	Source      string // "dict" 内置词典 / "online" 在线接口 / "none" 均未获取到
+	Senses []Sense
+	Source string // "deepseek" / "online" 在线接口 / "none" 均未获取到
 }
 
 var httpClient = &http.Client{Timeout: 5 * time.Second}
 
-// translateWord 依次尝试：内置词典 -> 在线免费接口兜底。
+// translateWord 依次尝试：DeepSeek（若已配置并启用） -> 在线免费接口兜底。
 // 即使翻译失败，也不会阻塞记录单词本身（调用方仍会把单词存进数据库，只是释义留空）。
 func translateWord(wordKey string) translateResult {
-	if entry, ok := lookupBuiltinDict(wordKey); ok {
-		return translateResult{Translation: entry.Translation, Pos: entry.Pos, Source: "dict"}
+	if senses, err := lookupDeepSeek(wordKey); err == nil {
+		return translateResult{Senses: senses, Source: "deepseek"}
+	} else {
+		log.Printf("deepseek 查词失败 word=%s err=%v", wordKey, err)
 	}
 
 	translation, err := translateOnline(wordKey)
 	if err != nil {
 		log.Printf("在线翻译失败 word=%s err=%v", wordKey, err)
-		return translateResult{Translation: "", Pos: "", Source: "none"}
+		return translateResult{Senses: nil, Source: "none"}
 	}
-	return translateResult{Translation: translation, Pos: "未知", Source: "online"}
+	return translateResult{Senses: []Sense{{Pos: "未知", Translation: translation}}, Source: "online"}
 }
 
 // 说明：这是 Google 翻译免注册、免 API Key 的公开网页接口，未来如需更稳定的翻译效果，

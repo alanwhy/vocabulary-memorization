@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>后台管理 - 背单词</title>
+<script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #fafafa;
+    --card-bg: #ffffff;
+    --border: #e5e5e5;
+    --text: #1f2328;
+    --muted: #8a8f98;
+    --accent: #2f6f4f;
+    --accent-soft: #eaf4ee;
+    --danger: #c65b5b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16181c;
+      --card-bg: #1f2229;
+      --border: #33363d;
+      --text: #e6e6e6;
+      --muted: #8a8f98;
+      --accent: #5fbf8c;
+      --accent-soft: #1f3329;
+      --danger: #e08080;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  #app {
+    max-width: 640px;
+    margin: 0 auto;
+    padding: 32px 20px 80px;
+  }
+  .topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+    font-size: 13px;
+    color: var(--muted);
+  }
+  .topbar a {
+    color: var(--muted);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-size: 12px;
+    text-decoration: none;
+  }
+  .topbar a:hover { color: var(--accent); border-color: var(--accent); }
+  h1 {
+    font-size: 22px;
+    font-weight: 600;
+    margin: 0 0 20px;
+    text-align: center;
+  }
+  h2 {
+    font-size: 16px;
+    font-weight: 600;
+    margin: 32px 0 12px;
+  }
+  .card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px;
+  }
+  label {
+    display: block;
+    font-size: 13px;
+    color: var(--muted);
+    margin: 12px 0 4px;
+  }
+  label:first-child { margin-top: 0; }
+  input[type="text"], input[type="password"] {
+    width: 100%;
+    padding: 10px 12px;
+    font-size: 14px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg);
+    color: var(--text);
+    outline: none;
+  }
+  .checkbox-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 12px 0 4px;
+  }
+  .checkbox-row input { width: auto; }
+  button.primary {
+    margin-top: 16px;
+    padding: 10px 16px;
+    font-size: 14px;
+    border: none;
+    border-radius: 8px;
+    background: var(--accent);
+    color: #fff;
+    cursor: pointer;
+  }
+  button.primary:disabled { opacity: 0.6; cursor: default; }
+  .msg {
+    font-size: 13px;
+    margin-top: 10px;
+    min-height: 16px;
+  }
+  .msg.error { color: var(--danger); }
+  .msg.ok { color: var(--accent); }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+  }
+  th, td {
+    text-align: left;
+    padding: 8px 6px;
+    border-bottom: 1px solid var(--border);
+  }
+  th { color: var(--muted); font-weight: 500; }
+  .badge {
+    font-size: 11px;
+    color: var(--accent);
+    background: var(--accent-soft);
+    padding: 2px 6px;
+    border-radius: 5px;
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <template v-if="loading">
+    <div class="msg">加载中...</div>
+  </template>
+  <template v-else-if="!isAdmin">
+    <div class="msg error">无权限访问，正在跳转...</div>
+  </template>
+  <template v-else>
+    <div class="topbar">
+      <span>{{ me.username }}（超管）</span>
+      <a href="/">返回背单词</a>
+    </div>
+    <h1>后台管理</h1>
+
+    <h2>用户管理</h2>
+    <div class="card">
+      <table>
+        <thead><tr><th>用户名</th><th>角色</th><th>创建时间</th></tr></thead>
+        <tbody>
+          <tr v-for="u in users" :key="u.id">
+            <td>{{ u.username }}</td>
+            <td><span class="badge" v-if="u.is_admin">超管</span><span v-else>普通用户</span></td>
+            <td>{{ formatTime(u.created_at) }}</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <label>用户名</label>
+      <input type="text" v-model="newUser.username" placeholder="新用户的用户名" />
+      <label>密码</label>
+      <input type="password" v-model="newUser.password" placeholder="至少 6 位" />
+      <div class="checkbox-row">
+        <input type="checkbox" id="isAdminCheckbox" v-model="newUser.is_admin" />
+        <label for="isAdminCheckbox" style="margin:0;">设为超管</label>
+      </div>
+      <button class="primary" :disabled="creatingUser" @click="createUser">新增用户</button>
+      <p class="msg" :class="{ error: !!userMsgError, ok: !!userMsgOk }">{{ userMsgError || userMsgOk }}</p>
+    </div>
+
+    <h2>DeepSeek 查词配置</h2>
+    <div class="card">
+      <div class="checkbox-row">
+        <input type="checkbox" id="dsEnabled" v-model="dsForm.enabled" />
+        <label for="dsEnabled" style="margin:0;">启用 DeepSeek 查词</label>
+      </div>
+      <label>API Key</label>
+      <input type="password" v-model="dsForm.api_key" placeholder="sk-..." />
+      <label>Base URL</label>
+      <input type="text" v-model="dsForm.base_url" placeholder="https://api.deepseek.com" />
+      <label>模型</label>
+      <input type="text" v-model="dsForm.model" placeholder="deepseek-v4-flash" />
+      <button class="primary" :disabled="savingSettings" @click="saveSettings">保存配置</button>
+      <p class="msg" :class="{ error: !!settingsMsgError, ok: !!settingsMsgOk }">{{ settingsMsgError || settingsMsgOk }}</p>
+    </div>
+  </template>
+</div>
+
+<script>
+const { createApp, ref, reactive, onMounted } = Vue;
+
+createApp({
+  setup() {
+    const loading = ref(true);
+    const isAdmin = ref(false);
+    const me = ref(null);
+
+    const users = ref([]);
+    const newUser = reactive({ username: "", password: "", is_admin: false });
+    const creatingUser = ref(false);
+    const userMsgError = ref("");
+    const userMsgOk = ref("");
+
+    const dsForm = reactive({ enabled: false, api_key: "", base_url: "", model: "" });
+    const savingSettings = ref(false);
+    const settingsMsgError = ref("");
+    const settingsMsgOk = ref("");
+
+    async function init() {
+      try {
+        const res = await fetch("/api/me");
+        if (!res.ok) {
+          window.location.href = "/";
+          return;
+        }
+        me.value = await res.json();
+        if (!me.value.is_admin) {
+          isAdmin.value = false;
+          window.location.href = "/";
+          return;
+        }
+        isAdmin.value = true;
+        await Promise.all([loadUsers(), loadSettings()]);
+      } finally {
+        loading.value = false;
+      }
+    }
+
+    async function loadUsers() {
+      const res = await fetch("/api/admin/users");
+      if (res.ok) users.value = await res.json();
+    }
+
+    async function loadSettings() {
+      const res = await fetch("/api/admin/settings");
+      if (res.ok) {
+        const data = await res.json();
+        dsForm.enabled = data.enabled;
+        dsForm.api_key = data.api_key;
+        dsForm.base_url = data.base_url;
+        dsForm.model = data.model;
+      }
+    }
+
+    async function createUser() {
+      userMsgError.value = "";
+      userMsgOk.value = "";
+      if (creatingUser.value) return;
+      creatingUser.value = true;
+      try {
+        const res = await fetch("/api/admin/users", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(newUser),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          userMsgError.value = data.error || "创建失败";
+          return;
+        }
+        users.value.push(data);
+        userMsgOk.value = `已创建用户 ${data.username}`;
+        newUser.username = "";
+        newUser.password = "";
+        newUser.is_admin = false;
+      } catch (e) {
+        userMsgError.value = "网络错误，请重试";
+      } finally {
+        creatingUser.value = false;
+      }
+    }
+
+    async function saveSettings() {
+      settingsMsgError.value = "";
+      settingsMsgOk.value = "";
+      if (savingSettings.value) return;
+      savingSettings.value = true;
+      try {
+        const res = await fetch("/api/admin/settings", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(dsForm),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          settingsMsgError.value = data.error || "保存失败";
+          return;
+        }
+        dsForm.enabled = data.enabled;
+        dsForm.api_key = data.api_key;
+        dsForm.base_url = data.base_url;
+        dsForm.model = data.model;
+        settingsMsgOk.value = "已保存";
+      } catch (e) {
+        settingsMsgError.value = "网络错误，请重试";
+      } finally {
+        savingSettings.value = false;
+      }
+    }
+
+    function formatTime(iso) {
+      const d = new Date(iso);
+      const pad = (n) => String(n).padStart(2, "0");
+      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    }
+
+    onMounted(init);
+
+    return {
+      loading, isAdmin, me,
+      users, newUser, creatingUser, userMsgError, userMsgOk, createUser,
+      dsForm, savingSettings, settingsMsgError, settingsMsgOk, saveSettings,
+      formatTime,
+    };
+  },
+}).mount("#app");
+</script>
+</body>
+</html>

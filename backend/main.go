@@ -17,14 +17,28 @@ import (
 var wordPattern = regexp.MustCompile(`^[A-Za-z][A-Za-z'\- ]{0,63}$`)
 
 func main() {
-	loadBuiltinDict()
 	connectDB()
 	defer db.Close()
 
+	migrateSchema()
+	adminID := bootstrapAdmin()
+	finalizeWordsUserID(adminID)
+	loadSettings()
+
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /api/words", handleAddWord)
-	mux.HandleFunc("GET /api/words", handleListWords)
-	mux.HandleFunc("DELETE /api/words/{id}", handleDeleteWord)
+	mux.HandleFunc("POST /api/login", handleLogin)
+	mux.HandleFunc("POST /api/logout", handleLogout)
+	mux.HandleFunc("GET /api/me", requireAuth(handleMe))
+
+	mux.HandleFunc("POST /api/words", requireAuth(handleAddWord))
+	mux.HandleFunc("GET /api/words", requireAuth(handleListWords))
+	mux.HandleFunc("DELETE /api/words/{id}", requireAuth(handleDeleteWord))
+
+	mux.HandleFunc("POST /api/admin/users", requireAdmin(handleCreateUser))
+	mux.HandleFunc("GET /api/admin/users", requireAdmin(handleListUsers))
+	mux.HandleFunc("GET /api/admin/settings", requireAdmin(handleGetSettings))
+	mux.HandleFunc("PUT /api/admin/settings", requireAdmin(handleUpdateSettings))
+
 	mux.Handle("/", http.FileServer(http.Dir("./static")))
 
 	addr := ":8080"
@@ -39,6 +53,8 @@ type addWordRequest struct {
 }
 
 func handleAddWord(w http.ResponseWriter, r *http.Request) {
+	user := currentUser(r)
+
 	var req addWordRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "请求格式不正确")
@@ -57,20 +73,26 @@ func handleAddWord(w http.ResponseWriter, r *http.Request) {
 	now := time.Now()
 
 	// 已存在则次数 +1 并直接返回
-	if handled := tryIncrementExisting(w, wordKey, now); handled {
+	if handled := tryIncrementExisting(w, user.ID, wordKey, now); handled {
 		return
 	}
 
 	// 不存在：查翻译后新建一条记录
 	result := translateWord(wordKey)
+	sensesJSON, err := json.Marshal(result.Senses)
+	if err != nil {
+		log.Printf("序列化释义失败: %v", err)
+		writeError(w, http.StatusInternalServerError, "保存失败")
+		return
+	}
 	res, err := db.Exec(
-		`INSERT INTO words (word_key, display_word, translation, pos, review_count, first_added_at, last_reviewed_at) VALUES (?, ?, ?, ?, 1, ?, ?)`,
-		wordKey, raw, result.Translation, result.Pos, now, now,
+		`INSERT INTO words (user_id, word_key, display_word, senses, review_count, first_added_at, last_reviewed_at) VALUES (?, ?, ?, ?, 1, ?, ?)`,
+		user.ID, wordKey, raw, sensesJSON, now, now,
 	)
 	if err != nil {
 		// 并发下可能有另一个请求刚好抢先插入了同一个单词，退化为累加次数
 		if mysqlErr, ok := err.(*mysqldriver.MySQLError); ok && mysqlErr.Number == 1062 {
-			if handled := tryIncrementExisting(w, wordKey, now); handled {
+			if handled := tryIncrementExisting(w, user.ID, wordKey, now); handled {
 				return
 			}
 		}
@@ -84,8 +106,7 @@ func handleAddWord(w http.ResponseWriter, r *http.Request) {
 		ID:             int(id),
 		WordKey:        wordKey,
 		DisplayWord:    raw,
-		Translation:    result.Translation,
-		Pos:            result.Pos,
+		Senses:         result.Senses,
 		ReviewCount:    1,
 		FirstAddedAt:   now,
 		LastReviewedAt: now,
@@ -93,14 +114,15 @@ func handleAddWord(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, newWord)
 }
 
-// tryIncrementExisting 如果 wordKey 已存在，则次数 +1、更新最近背诵时间，并写响应；
+// tryIncrementExisting 如果当前用户名下 wordKey 已存在，则次数 +1、更新最近背诵时间，并写响应；
 // 返回 true 表示请求已经处理完毕（无论是成功还是出错），调用方不需要再做任何事。
-func tryIncrementExisting(w http.ResponseWriter, wordKey string, now time.Time) bool {
+func tryIncrementExisting(w http.ResponseWriter, userID int, wordKey string, now time.Time) bool {
 	var existing Word
+	var sensesRaw []byte
 	err := db.QueryRow(
-		`SELECT id, word_key, display_word, translation, pos, review_count, first_added_at, last_reviewed_at FROM words WHERE word_key = ?`,
-		wordKey,
-	).Scan(&existing.ID, &existing.WordKey, &existing.DisplayWord, &existing.Translation, &existing.Pos, &existing.ReviewCount, &existing.FirstAddedAt, &existing.LastReviewedAt)
+		`SELECT id, word_key, display_word, senses, review_count, first_added_at, last_reviewed_at FROM words WHERE user_id = ? AND word_key = ?`,
+		userID, wordKey,
+	).Scan(&existing.ID, &existing.WordKey, &existing.DisplayWord, &sensesRaw, &existing.ReviewCount, &existing.FirstAddedAt, &existing.LastReviewedAt)
 
 	if err == sql.ErrNoRows {
 		return false
@@ -109,6 +131,11 @@ func tryIncrementExisting(w http.ResponseWriter, wordKey string, now time.Time) 
 		log.Printf("查询单词失败: %v", err)
 		writeError(w, http.StatusInternalServerError, "查询失败")
 		return true
+	}
+	if len(sensesRaw) > 0 {
+		if err := json.Unmarshal(sensesRaw, &existing.Senses); err != nil {
+			log.Printf("解析释义失败: %v", err)
+		}
 	}
 
 	newCount := existing.ReviewCount + 1
@@ -124,7 +151,11 @@ func tryIncrementExisting(w http.ResponseWriter, wordKey string, now time.Time) 
 }
 
 func handleListWords(w http.ResponseWriter, r *http.Request) {
-	rows, err := db.Query(`SELECT id, word_key, display_word, translation, pos, review_count, first_added_at, last_reviewed_at FROM words ORDER BY review_count DESC, last_reviewed_at DESC`)
+	user := currentUser(r)
+	rows, err := db.Query(
+		`SELECT id, word_key, display_word, senses, review_count, first_added_at, last_reviewed_at FROM words WHERE user_id = ? ORDER BY review_count DESC, last_reviewed_at DESC`,
+		user.ID,
+	)
 	if err != nil {
 		log.Printf("查询列表失败: %v", err)
 		writeError(w, http.StatusInternalServerError, "查询失败")
@@ -135,9 +166,15 @@ func handleListWords(w http.ResponseWriter, r *http.Request) {
 	list := []Word{}
 	for rows.Next() {
 		var wd Word
-		if err := rows.Scan(&wd.ID, &wd.WordKey, &wd.DisplayWord, &wd.Translation, &wd.Pos, &wd.ReviewCount, &wd.FirstAddedAt, &wd.LastReviewedAt); err != nil {
+		var sensesRaw []byte
+		if err := rows.Scan(&wd.ID, &wd.WordKey, &wd.DisplayWord, &sensesRaw, &wd.ReviewCount, &wd.FirstAddedAt, &wd.LastReviewedAt); err != nil {
 			log.Printf("读取记录失败: %v", err)
 			continue
+		}
+		if len(sensesRaw) > 0 {
+			if err := json.Unmarshal(sensesRaw, &wd.Senses); err != nil {
+				log.Printf("解析释义失败: %v", err)
+			}
 		}
 		list = append(list, wd)
 	}
@@ -145,18 +182,75 @@ func handleListWords(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleDeleteWord(w http.ResponseWriter, r *http.Request) {
+	user := currentUser(r)
 	idStr := r.PathValue("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "无效的 id")
 		return
 	}
-	if _, err := db.Exec(`DELETE FROM words WHERE id = ?`, id); err != nil {
+	if _, err := db.Exec(`DELETE FROM words WHERE id = ? AND user_id = ?`, id, user.ID); err != nil {
 		log.Printf("删除失败: %v", err)
 		writeError(w, http.StatusInternalServerError, "删除失败")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+type createUserRequest struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+	IsAdmin  bool   `json:"is_admin"`
+}
+
+func handleCreateUser(w http.ResponseWriter, r *http.Request) {
+	var req createUserRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "请求格式不正确")
+		return
+	}
+	username := strings.TrimSpace(req.Username)
+	if username == "" {
+		writeError(w, http.StatusBadRequest, "用户名不能为空")
+		return
+	}
+	if len(req.Password) < 6 {
+		writeError(w, http.StatusBadRequest, "密码长度至少 6 位")
+		return
+	}
+
+	user, err := createUser(username, req.Password, req.IsAdmin)
+	if err != nil {
+		if mysqlErr, ok := err.(*mysqldriver.MySQLError); ok && mysqlErr.Number == 1062 {
+			writeError(w, http.StatusConflict, "用户名已存在")
+			return
+		}
+		log.Printf("创建用户失败: %v", err)
+		writeError(w, http.StatusInternalServerError, "创建失败")
+		return
+	}
+	writeJSON(w, http.StatusCreated, user)
+}
+
+func handleListUsers(w http.ResponseWriter, r *http.Request) {
+	rows, err := db.Query(`SELECT id, username, is_admin, created_at FROM users ORDER BY id`)
+	if err != nil {
+		log.Printf("查询用户列表失败: %v", err)
+		writeError(w, http.StatusInternalServerError, "查询失败")
+		return
+	}
+	defer rows.Close()
+
+	list := []User{}
+	for rows.Next() {
+		var u User
+		if err := rows.Scan(&u.ID, &u.Username, &u.IsAdmin, &u.CreatedAt); err != nil {
+			log.Printf("读取用户记录失败: %v", err)
+			continue
+		}
+		list = append(list, u)
+	}
+	writeJSON(w, http.StatusOK, list)
 }
 
 func writeJSON(w http.ResponseWriter, status int, data interface{}) {

@@ -7,7 +7,7 @@
 <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
 <style>
   :root {
-    color-scheme: light;
+    color-scheme: light dark;
     --bg: #fafafa;
     --card-bg: #ffffff;
     --border: #e5e5e5;
@@ -16,6 +16,18 @@
     --accent: #2f6f4f;
     --accent-soft: #eaf4ee;
     --danger: #c65b5b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16181c;
+      --card-bg: #1f2229;
+      --border: #33363d;
+      --text: #e6e6e6;
+      --muted: #8a8f98;
+      --accent: #5fbf8c;
+      --accent-soft: #1f3329;
+      --danger: #e08080;
+    }
   }
   * { box-sizing: border-box; }
   html, body {
@@ -29,12 +41,70 @@
     margin: 0 auto;
     padding: 32px 20px 80px;
   }
+  .topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+    font-size: 13px;
+    color: var(--muted);
+  }
+  .topbar a, .topbar button {
+    color: var(--muted);
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-size: 12px;
+    cursor: pointer;
+    text-decoration: none;
+    margin-left: 6px;
+  }
+  .topbar a:hover, .topbar button:hover { color: var(--accent); border-color: var(--accent); }
   h1 {
     font-size: 22px;
     font-weight: 600;
     margin: 0 0 20px;
     text-align: center;
     letter-spacing: 0.5px;
+  }
+  .login-box {
+    max-width: 360px;
+    margin: 80px auto 0;
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 28px;
+  }
+  .login-box h1 { margin-bottom: 24px; }
+  .login-box input[type="text"],
+  .login-box input[type="password"] {
+    width: 100%;
+    padding: 12px 14px;
+    font-size: 15px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg);
+    color: var(--text);
+    outline: none;
+    margin-bottom: 12px;
+  }
+  .login-box button {
+    width: 100%;
+    padding: 12px;
+    font-size: 15px;
+    border: none;
+    border-radius: 8px;
+    background: var(--accent);
+    color: #fff;
+    cursor: pointer;
+  }
+  .login-box button:disabled { opacity: 0.6; cursor: default; }
+  .login-error {
+    color: var(--danger);
+    font-size: 13px;
+    margin: -4px 0 12px;
+    min-height: 16px;
   }
   .input-wrap {
     margin-bottom: 8px;
@@ -46,6 +116,7 @@
     border: 1px solid var(--border);
     border-radius: 10px;
     background: var(--card-bg);
+    color: var(--text);
     outline: none;
     transition: border-color 0.15s ease;
   }
@@ -84,16 +155,26 @@
   }
   .word-main {
     display: flex;
-    align-items: baseline;
-    gap: 10px;
-    flex-wrap: wrap;
+    flex-direction: column;
+    gap: 4px;
     min-width: 0;
   }
   .word-main .word {
     font-size: 17px;
     font-weight: 600;
   }
-  .word-main .pos {
+  .senses {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+  .sense {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .sense .pos {
     font-size: 12px;
     color: var(--accent);
     background: var(--accent-soft);
@@ -101,9 +182,9 @@
     border-radius: 5px;
     white-space: nowrap;
   }
-  .word-main .translation {
+  .sense .translation {
     font-size: 14px;
-    color: #4b5157;
+    color: var(--text);
     word-break: break-word;
   }
   .word-meta {
@@ -155,43 +236,90 @@
 </head>
 <body>
 <div id="app">
-  <h1>背单词</h1>
-  <div class="input-wrap">
-    <input
-      type="text"
-      v-model="inputWord"
-      :disabled="submitting"
-      @keyup.enter="submitWord"
-      placeholder="输入英文单词，按回车记录"
-      autofocus
-    />
-  </div>
-  <p class="hint" :class="{ error: !!errorMsg }">{{ errorMsg || placeholderHint }}</p>
+  <template v-if="checkingAuth">
+    <div class="empty">加载中...</div>
+  </template>
 
-  <div class="stats" v-if="words.length">共 {{ words.length }} 个单词 · 累计背诵 {{ totalReviews }} 次</div>
+  <template v-else-if="!currentUser">
+    <div class="login-box">
+      <h1>背单词</h1>
+      <input
+        type="text"
+        v-model="loginForm.username"
+        placeholder="用户名"
+        autofocus
+        @keyup.enter="login"
+      />
+      <input
+        type="password"
+        v-model="loginForm.password"
+        placeholder="密码"
+        @keyup.enter="login"
+      />
+      <p class="login-error">{{ loginError }}</p>
+      <button :disabled="loggingIn" @click="login">登录</button>
+    </div>
+  </template>
 
-  <ul class="word-list" v-if="words.length">
-    <li class="word-card" v-for="w in words" :key="w.id">
-      <div class="word-main">
-        <span class="word">{{ w.display_word }}</span>
-        <span class="pos" v-if="w.pos">{{ w.pos }}</span>
-        <span class="translation">{{ w.translation || '暂无释义' }}</span>
-      </div>
-      <div class="word-meta">
-        <span class="count">×{{ w.review_count }}</span>
-        <span class="time">{{ formatTime(w.last_reviewed_at) }}</span>
-        <button class="delete-btn" @click="deleteWord(w)">删除</button>
-      </div>
-    </li>
-  </ul>
-  <div class="empty" v-else>还没有记录，输入一个单词试试</div>
+  <template v-else>
+    <div class="topbar">
+      <span>{{ currentUser.username }}</span>
+      <span>
+        <a v-if="currentUser.is_admin" href="/admin.html">后台管理</a>
+        <button @click="logout">退出登录</button>
+      </span>
+    </div>
+    <h1>背单词</h1>
+    <div class="input-wrap">
+      <input
+        type="text"
+        v-model="inputWord"
+        :disabled="submitting"
+        @keyup.enter="submitWord"
+        placeholder="输入英文单词，按回车记录"
+        autofocus
+      />
+    </div>
+    <p class="hint" :class="{ error: !!errorMsg }">{{ errorMsg || placeholderHint }}</p>
+
+    <div class="stats" v-if="words.length">共 {{ words.length }} 个单词 · 累计背诵 {{ totalReviews }} 次</div>
+
+    <ul class="word-list" v-if="words.length">
+      <li class="word-card" v-for="w in words" :key="w.id">
+        <div class="word-main">
+          <span class="word">{{ w.display_word }}</span>
+          <div class="senses" v-if="w.senses && w.senses.length">
+            <div class="sense" v-for="(s, idx) in w.senses" :key="idx">
+              <span class="pos" v-if="s.pos">{{ s.pos }}</span>
+              <span class="translation">{{ s.translation }}</span>
+            </div>
+          </div>
+          <div class="senses" v-else>
+            <div class="sense"><span class="translation">暂无释义</span></div>
+          </div>
+        </div>
+        <div class="word-meta">
+          <span class="count">×{{ w.review_count }}</span>
+          <span class="time">{{ formatTime(w.last_reviewed_at) }}</span>
+          <button class="delete-btn" @click="deleteWord(w)">删除</button>
+        </div>
+      </li>
+    </ul>
+    <div class="empty" v-else>还没有记录，输入一个单词试试</div>
+  </template>
 </div>
 
 <script>
-const { createApp, ref, computed, onMounted } = Vue;
+const { createApp, ref, reactive, computed, onMounted } = Vue;
 
 createApp({
   setup() {
+    const checkingAuth = ref(true);
+    const currentUser = ref(null);
+    const loginForm = reactive({ username: "", password: "" });
+    const loginError = ref("");
+    const loggingIn = ref(false);
+
     const inputWord = ref("");
     const words = ref([]);
     const submitting = ref(false);
@@ -207,6 +335,61 @@ createApp({
         if (b.review_count !== a.review_count) return b.review_count - a.review_count;
         return new Date(b.last_reviewed_at) - new Date(a.last_reviewed_at);
       });
+    }
+
+    async function checkAuth() {
+      try {
+        const res = await fetch("/api/me");
+        if (res.ok) {
+          currentUser.value = await res.json();
+          await loadWords();
+        } else {
+          currentUser.value = null;
+        }
+      } catch (e) {
+        currentUser.value = null;
+      } finally {
+        checkingAuth.value = false;
+      }
+    }
+
+    async function login() {
+      if (loggingIn.value) return;
+      if (!loginForm.username || !loginForm.password) {
+        loginError.value = "请输入用户名和密码";
+        return;
+      }
+      loggingIn.value = true;
+      loginError.value = "";
+      try {
+        const res = await fetch("/api/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ username: loginForm.username, password: loginForm.password }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          loginError.value = data.error || "登录失败";
+          return;
+        }
+        currentUser.value = data;
+        loginForm.password = "";
+        await loadWords();
+      } catch (e) {
+        loginError.value = "网络错误，请重试";
+      } finally {
+        loggingIn.value = false;
+      }
+    }
+
+    async function logout() {
+      try {
+        await fetch("/api/logout", { method: "POST" });
+      } catch (e) {
+        // 忽略网络错误，前端照样清掉登录态
+      }
+      currentUser.value = null;
+      words.value = [];
     }
 
     async function loadWords() {
@@ -268,9 +451,16 @@ createApp({
       return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
     }
 
-    onMounted(loadWords);
+    onMounted(checkAuth);
 
     return {
+      checkingAuth,
+      currentUser,
+      loginForm,
+      loginError,
+      loggingIn,
+      login,
+      logout,
       inputWord,
       words,
       submitting,
