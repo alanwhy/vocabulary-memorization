@@ -187,6 +187,10 @@
     color: var(--text);
     word-break: break-word;
   }
+  .sense .translation.pending {
+    color: var(--muted);
+    font-style: italic;
+  }
   .word-meta {
     display: flex;
     align-items: center;
@@ -294,6 +298,9 @@
               <span class="translation">{{ s.translation }}</span>
             </div>
           </div>
+          <div class="senses" v-else-if="w.translating">
+            <div class="sense"><span class="translation pending">查词中...</span></div>
+          </div>
           <div class="senses" v-else>
             <div class="sense"><span class="translation">暂无释义</span></div>
           </div>
@@ -390,6 +397,28 @@ createApp({
       }
       currentUser.value = null;
       words.value = [];
+      if (pollTimer) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+      }
+    }
+
+    let pollTimer = null;
+
+    // 只要列表里还有查词中的单词，就定时刷新列表，直到后台把释义写回
+    function schedulePollIfNeeded() {
+      const hasPending = words.value.some((w) => w.translating);
+      if (!hasPending) {
+        if (pollTimer) {
+          clearInterval(pollTimer);
+          pollTimer = null;
+        }
+        return;
+      }
+      if (pollTimer) return;
+      pollTimer = setInterval(async () => {
+        await loadWords();
+      }, 1500);
     }
 
     async function loadWords() {
@@ -398,6 +427,7 @@ createApp({
         if (!res.ok) throw new Error("加载失败");
         words.value = await res.json();
         sortWords();
+        schedulePollIfNeeded();
       } catch (e) {
         errorMsg.value = "列表加载失败，请刷新重试";
       }
@@ -426,6 +456,7 @@ createApp({
           words.value.push(data);
         }
         sortWords();
+        schedulePollIfNeeded();
         inputWord.value = "";
       } catch (e) {
         errorMsg.value = "网络错误，请重试";

@@ -77,17 +77,10 @@ func handleAddWord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 不存在：查翻译后新建一条记录
-	result := translateWord(wordKey)
-	sensesJSON, err := json.Marshal(result.Senses)
-	if err != nil {
-		log.Printf("序列化释义失败: %v", err)
-		writeError(w, http.StatusInternalServerError, "保存失败")
-		return
-	}
+	// 不存在：先原样插入，标记为查词中，立即返回；释义交给后台异步查询后再写回
 	res, err := db.Exec(
-		`INSERT INTO words (user_id, word_key, display_word, senses, review_count, first_added_at, last_reviewed_at) VALUES (?, ?, ?, ?, 1, ?, ?)`,
-		user.ID, wordKey, raw, sensesJSON, now, now,
+		`INSERT INTO words (user_id, word_key, display_word, senses, translating, review_count, first_added_at, last_reviewed_at) VALUES (?, ?, ?, ?, 1, 1, ?, ?)`,
+		user.ID, wordKey, raw, []byte("[]"), now, now,
 	)
 	if err != nil {
 		// 并发下可能有另一个请求刚好抢先插入了同一个单词，退化为累加次数
@@ -101,17 +94,34 @@ func handleAddWord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id, _ := res.LastInsertId()
+	wordID := int(id)
+
+	go translateAndSave(wordID, wordKey)
 
 	newWord := Word{
-		ID:             int(id),
+		ID:             wordID,
 		WordKey:        wordKey,
 		DisplayWord:    raw,
-		Senses:         result.Senses,
+		Senses:         []Sense{},
+		Translating:    true,
 		ReviewCount:    1,
 		FirstAddedAt:   now,
 		LastReviewedAt: now,
 	}
 	writeJSON(w, http.StatusCreated, newWord)
+}
+
+// translateAndSave 在后台异步查词，查完再把释义写回数据库，不阻塞单词的录入请求
+func translateAndSave(wordID int, wordKey string) {
+	result := translateWord(wordKey)
+	sensesJSON, err := json.Marshal(result.Senses)
+	if err != nil {
+		log.Printf("序列化释义失败 word=%s: %v", wordKey, err)
+		sensesJSON = []byte("[]")
+	}
+	if _, err := db.Exec(`UPDATE words SET senses = ?, translating = 0 WHERE id = ?`, sensesJSON, wordID); err != nil {
+		log.Printf("写回释义失败 word=%s id=%d: %v", wordKey, wordID, err)
+	}
 }
 
 // tryIncrementExisting 如果当前用户名下 wordKey 已存在，则次数 +1、更新最近背诵时间，并写响应；
@@ -120,9 +130,9 @@ func tryIncrementExisting(w http.ResponseWriter, userID int, wordKey string, now
 	var existing Word
 	var sensesRaw []byte
 	err := db.QueryRow(
-		`SELECT id, word_key, display_word, senses, review_count, first_added_at, last_reviewed_at FROM words WHERE user_id = ? AND word_key = ?`,
+		`SELECT id, word_key, display_word, senses, translating, review_count, first_added_at, last_reviewed_at FROM words WHERE user_id = ? AND word_key = ?`,
 		userID, wordKey,
-	).Scan(&existing.ID, &existing.WordKey, &existing.DisplayWord, &sensesRaw, &existing.ReviewCount, &existing.FirstAddedAt, &existing.LastReviewedAt)
+	).Scan(&existing.ID, &existing.WordKey, &existing.DisplayWord, &sensesRaw, &existing.Translating, &existing.ReviewCount, &existing.FirstAddedAt, &existing.LastReviewedAt)
 
 	if err == sql.ErrNoRows {
 		return false
@@ -153,7 +163,7 @@ func tryIncrementExisting(w http.ResponseWriter, userID int, wordKey string, now
 func handleListWords(w http.ResponseWriter, r *http.Request) {
 	user := currentUser(r)
 	rows, err := db.Query(
-		`SELECT id, word_key, display_word, senses, review_count, first_added_at, last_reviewed_at FROM words WHERE user_id = ? ORDER BY review_count DESC, last_reviewed_at DESC`,
+		`SELECT id, word_key, display_word, senses, translating, review_count, first_added_at, last_reviewed_at FROM words WHERE user_id = ? ORDER BY review_count DESC, last_reviewed_at DESC`,
 		user.ID,
 	)
 	if err != nil {
@@ -167,7 +177,7 @@ func handleListWords(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var wd Word
 		var sensesRaw []byte
-		if err := rows.Scan(&wd.ID, &wd.WordKey, &wd.DisplayWord, &sensesRaw, &wd.ReviewCount, &wd.FirstAddedAt, &wd.LastReviewedAt); err != nil {
+		if err := rows.Scan(&wd.ID, &wd.WordKey, &wd.DisplayWord, &sensesRaw, &wd.Translating, &wd.ReviewCount, &wd.FirstAddedAt, &wd.LastReviewedAt); err != nil {
 			log.Printf("读取记录失败: %v", err)
 			continue
 		}
