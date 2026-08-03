@@ -1,5 +1,6 @@
 FROM golang:1.24-alpine AS builder
 WORKDIR /app
+ENV GOPROXY=https://goproxy.cn,direct
 COPY go.mod ./
 COPY . .
 RUN go mod tidy
