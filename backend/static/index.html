@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>背单词</title>
+<script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+<style>
+  :root {
+    color-scheme: light;
+    --bg: #fafafa;
+    --card-bg: #ffffff;
+    --border: #e5e5e5;
+    --text: #1f2328;
+    --muted: #8a8f98;
+    --accent: #2f6f4f;
+    --accent-soft: #eaf4ee;
+    --danger: #c65b5b;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  #app {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 32px 20px 80px;
+  }
+  h1 {
+    font-size: 22px;
+    font-weight: 600;
+    margin: 0 0 20px;
+    text-align: center;
+    letter-spacing: 0.5px;
+  }
+  .input-wrap {
+    margin-bottom: 8px;
+  }
+  input[type="text"] {
+    width: 100%;
+    padding: 14px 16px;
+    font-size: 16px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--card-bg);
+    outline: none;
+    transition: border-color 0.15s ease;
+  }
+  input[type="text"]:focus {
+    border-color: var(--accent);
+  }
+  .hint {
+    font-size: 13px;
+    color: var(--muted);
+    margin: 6px 4px 24px;
+    min-height: 16px;
+  }
+  .hint.error { color: var(--danger); }
+  .stats {
+    font-size: 13px;
+    color: var(--muted);
+    margin: 0 4px 12px;
+  }
+  ul.word-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .word-card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .word-main {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    flex-wrap: wrap;
+    min-width: 0;
+  }
+  .word-main .word {
+    font-size: 17px;
+    font-weight: 600;
+  }
+  .word-main .pos {
+    font-size: 12px;
+    color: var(--accent);
+    background: var(--accent-soft);
+    padding: 2px 6px;
+    border-radius: 5px;
+    white-space: nowrap;
+  }
+  .word-main .translation {
+    font-size: 14px;
+    color: #4b5157;
+    word-break: break-word;
+  }
+  .word-meta {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-shrink: 0;
+  }
+  .word-meta .count {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--accent);
+    background: var(--accent-soft);
+    padding: 3px 8px;
+    border-radius: 999px;
+  }
+  .word-meta .time {
+    font-size: 12px;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+  .delete-btn {
+    border: none;
+    background: transparent;
+    color: var(--muted);
+    font-size: 12px;
+    cursor: pointer;
+    padding: 4px 6px;
+  }
+  .delete-btn:hover { color: var(--danger); }
+  .empty {
+    text-align: center;
+    color: var(--muted);
+    font-size: 14px;
+    padding: 60px 0;
+  }
+
+  @media (max-width: 480px) {
+    .word-card {
+      flex-direction: column;
+      align-items: flex-start;
+    }
+    .word-meta {
+      width: 100%;
+      justify-content: space-between;
+    }
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <h1>背单词</h1>
+  <div class="input-wrap">
+    <input
+      type="text"
+      v-model="inputWord"
+      :disabled="submitting"
+      @keyup.enter="submitWord"
+      placeholder="输入英文单词，按回车记录"
+      autofocus
+    />
+  </div>
+  <p class="hint" :class="{ error: !!errorMsg }">{{ errorMsg || placeholderHint }}</p>
+
+  <div class="stats" v-if="words.length">共 {{ words.length }} 个单词 · 累计背诵 {{ totalReviews }} 次</div>
+
+  <ul class="word-list" v-if="words.length">
+    <li class="word-card" v-for="w in words" :key="w.id">
+      <div class="word-main">
+        <span class="word">{{ w.display_word }}</span>
+        <span class="pos" v-if="w.pos">{{ w.pos }}</span>
+        <span class="translation">{{ w.translation || '暂无释义' }}</span>
+      </div>
+      <div class="word-meta">
+        <span class="count">×{{ w.review_count }}</span>
+        <span class="time">{{ formatTime(w.last_reviewed_at) }}</span>
+        <button class="delete-btn" @click="deleteWord(w)">删除</button>
+      </div>
+    </li>
+  </ul>
+  <div class="empty" v-else>还没有记录，输入一个单词试试</div>
+</div>
+
+<script>
+const { createApp, ref, computed, onMounted } = Vue;
+
+createApp({
+  setup() {
+    const inputWord = ref("");
+    const words = ref([]);
+    const submitting = ref(false);
+    const errorMsg = ref("");
+    const placeholderHint = "重复输入同一个单词会累加背诵次数";
+
+    const totalReviews = computed(() =>
+      words.value.reduce((sum, w) => sum + w.review_count, 0)
+    );
+
+    function sortWords() {
+      words.value.sort((a, b) => {
+        if (b.review_count !== a.review_count) return b.review_count - a.review_count;
+        return new Date(b.last_reviewed_at) - new Date(a.last_reviewed_at);
+      });
+    }
+
+    async function loadWords() {
+      try {
+        const res = await fetch("/api/words");
+        if (!res.ok) throw new Error("加载失败");
+        words.value = await res.json();
+        sortWords();
+      } catch (e) {
+        errorMsg.value = "列表加载失败，请刷新重试";
+      }
+    }
+
+    async function submitWord() {
+      const word = inputWord.value.trim();
+      if (!word || submitting.value) return;
+      submitting.value = true;
+      errorMsg.value = "";
+      try {
+        const res = await fetch("/api/words", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ word }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          errorMsg.value = data.error || "记录失败";
+          return;
+        }
+        const idx = words.value.findIndex((w) => w.id === data.id);
+        if (idx >= 0) {
+          words.value[idx] = data;
+        } else {
+          words.value.push(data);
+        }
+        sortWords();
+        inputWord.value = "";
+      } catch (e) {
+        errorMsg.value = "网络错误，请重试";
+      } finally {
+        submitting.value = false;
+      }
+    }
+
+    async function deleteWord(w) {
+      if (!confirm(`确定删除「${w.display_word}」吗？`)) return;
+      try {
+        const res = await fetch(`/api/words/${w.id}`, { method: "DELETE" });
+        if (!res.ok) throw new Error();
+        words.value = words.value.filter((x) => x.id !== w.id);
+      } catch (e) {
+        errorMsg.value = "删除失败，请重试";
+      }
+    }
+
+    function formatTime(iso) {
+      const d = new Date(iso);
+      const pad = (n) => String(n).padStart(2, "0");
+      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    }
+
+    onMounted(loadWords);
+
+    return {
+      inputWord,
+      words,
+      submitting,
+      errorMsg,
+      placeholderHint,
+      totalReviews,
+      submitWord,
+      deleteWord,
+      formatTime,
+    };
+  },
+}).mount("#app");
+</script>
+</body>
+</html>
