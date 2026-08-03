@@ -31,7 +31,7 @@ const (
 // loadSettings 启动时调用：如果 settings 表里还没有 DeepSeek 配置，用环境变量（或内置默认值）种一份进去，
 // 之后一律以数据库里的值为准，读到内存缓存里
 func loadSettings() {
-	seedSettingIfMissing(settingKeyAPIKey, getEnv("DEEPSEEK_API_KEY", "REDACTED"))
+	seedSettingIfMissing(settingKeyAPIKey, getEnv("DEEPSEEK_API_KEY", ""))
 	seedSettingIfMissing(settingKeyBaseURL, getEnv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"))
 	seedSettingIfMissing(settingKeyModel, getEnv("DEEPSEEK_MODEL", "deepseek-v4-flash"))
 	seedSettingIfMissing(settingKeyEnabled, "true")
