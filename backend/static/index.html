@@ -269,6 +269,7 @@
     <div class="topbar">
       <span>{{ currentUser.username }}</span>
       <span>
+        <a href="/stats.html">统计</a>
         <a v-if="currentUser.is_admin" href="/admin.html">后台管理</a>
         <button @click="logout">退出登录</button>
       </span>

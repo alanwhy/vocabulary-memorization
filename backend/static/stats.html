@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>统计 · 背单词</title>
+<script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #fafafa;
+    --card-bg: #ffffff;
+    --border: #e5e5e5;
+    --text: #1f2328;
+    --muted: #8a8f98;
+    --accent: #2f6f4f;
+    --accent-soft: #eaf4ee;
+    --danger: #c65b5b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16181c;
+      --card-bg: #1f2229;
+      --border: #33363d;
+      --text: #e6e6e6;
+      --muted: #8a8f98;
+      --accent: #5fbf8c;
+      --accent-soft: #1f3329;
+      --danger: #e08080;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  #app {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 32px 20px 80px;
+  }
+  .topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+    font-size: 13px;
+    color: var(--muted);
+  }
+  .topbar a, .topbar button {
+    color: var(--muted);
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-size: 12px;
+    cursor: pointer;
+    text-decoration: none;
+    margin-left: 6px;
+  }
+  .topbar a:hover, .topbar button:hover { color: var(--accent); border-color: var(--accent); }
+  h1 {
+    font-size: 22px;
+    font-weight: 600;
+    margin: 0 0 20px;
+    text-align: center;
+    letter-spacing: 0.5px;
+  }
+  h2 {
+    font-size: 15px;
+    font-weight: 600;
+    margin: 28px 4px 12px;
+  }
+  .card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px;
+  }
+  .overview {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px;
+  }
+  .overview .card {
+    text-align: center;
+    padding: 16px 8px;
+  }
+  .overview .num {
+    font-size: 22px;
+    font-weight: 700;
+    color: var(--accent);
+  }
+  .overview .label {
+    font-size: 12px;
+    color: var(--muted);
+    margin-top: 4px;
+  }
+  .bar-chart {
+    display: flex;
+    align-items: flex-end;
+    gap: 4px;
+    height: 120px;
+  }
+  .bar-col {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    height: 100%;
+    justify-content: flex-end;
+    gap: 4px;
+    min-width: 0;
+  }
+  .bar-col .bar-value {
+    font-size: 11px;
+    color: var(--muted);
+  }
+  .bar-col .bar {
+    width: 100%;
+    max-width: 22px;
+    background: var(--accent);
+    border-radius: 3px 3px 0 0;
+    min-height: 2px;
+  }
+  .bar-col .bar-label {
+    font-size: 10px;
+    color: var(--muted);
+    white-space: nowrap;
+    transform: rotate(-40deg);
+    transform-origin: top center;
+    margin-top: 6px;
+  }
+  .dist-chart {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .dist-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .dist-row .dist-label {
+    font-size: 13px;
+    color: var(--muted);
+    width: 72px;
+    flex-shrink: 0;
+  }
+  .dist-row .dist-bar-wrap {
+    flex: 1;
+    background: var(--accent-soft);
+    border-radius: 6px;
+    overflow: hidden;
+    height: 18px;
+  }
+  .dist-row .dist-bar {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 6px;
+    min-width: 2px;
+  }
+  .dist-row .dist-count {
+    font-size: 13px;
+    font-weight: 600;
+    width: 32px;
+    text-align: right;
+    flex-shrink: 0;
+  }
+  ul.stale-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .stale-item {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px 14px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .stale-item .word {
+    font-size: 15px;
+    font-weight: 600;
+  }
+  .stale-item .days {
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .empty {
+    text-align: center;
+    color: var(--muted);
+    font-size: 14px;
+    padding: 60px 0;
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <template v-if="checkingAuth">
+    <div class="empty">加载中...</div>
+  </template>
+
+  <template v-else>
+    <div class="topbar">
+      <span>{{ currentUser ? currentUser.username : "" }}</span>
+      <span>
+        <a href="/">背单词</a>
+      </span>
+    </div>
+    <h1>统计</h1>
+
+    <template v-if="words.length">
+      <div class="overview">
+        <div class="card">
+          <div class="num">{{ words.length }}</div>
+          <div class="label">总词汇量</div>
+        </div>
+        <div class="card">
+          <div class="num">{{ totalReviews }}</div>
+          <div class="label">累计背诵次数</div>
+        </div>
+        <div class="card">
+          <div class="num">{{ avgReviews }}</div>
+          <div class="label">平均背诵次数</div>
+        </div>
+        <div class="card">
+          <div class="num">{{ translatingCount }}</div>
+          <div class="label">查词中</div>
+        </div>
+      </div>
+
+      <h2>最近 14 天新增趋势</h2>
+      <div class="card">
+        <div class="bar-chart">
+          <div class="bar-col" v-for="d in dailyTrend" :key="d.date">
+            <span class="bar-value">{{ d.count || "" }}</span>
+            <div class="bar" :style="{ height: barHeight(d.count, maxDailyCount) }"></div>
+            <span class="bar-label">{{ d.label }}</span>
+          </div>
+        </div>
+      </div>
+
+      <h2>背诵次数分布</h2>
+      <div class="card dist-chart">
+        <div class="dist-row" v-for="b in reviewBuckets" :key="b.label">
+          <span class="dist-label">{{ b.label }}</span>
+          <div class="dist-bar-wrap">
+            <div class="dist-bar" :style="{ width: barHeight(b.count, maxBucketCount) }"></div>
+          </div>
+          <span class="dist-count">{{ b.count }}</span>
+        </div>
+      </div>
+
+      <h2>最久未复习</h2>
+      <ul class="stale-list">
+        <li class="stale-item" v-for="w in staleWords" :key="w.id">
+          <span class="word">{{ w.display_word }}</span>
+          <span class="days">{{ daysSince(w.last_reviewed_at) }} 天未复习</span>
+        </li>
+      </ul>
+    </template>
+
+    <div class="empty" v-else>还没有单词记录，先去背几个单词吧</div>
+  </template>
+</div>
+
+<script>
+const { createApp, ref, computed, onMounted } = Vue;
+
+createApp({
+  setup() {
+    const checkingAuth = ref(true);
+    const currentUser = ref(null);
+    const words = ref([]);
+
+    const totalReviews = computed(() =>
+      words.value.reduce((sum, w) => sum + w.review_count, 0)
+    );
+
+    const avgReviews = computed(() => {
+      if (!words.value.length) return "0";
+      return (totalReviews.value / words.value.length).toFixed(1);
+    });
+
+    const translatingCount = computed(() =>
+      words.value.filter((w) => w.translating).length
+    );
+
+    function dateKey(d) {
+      const pad = (n) => String(n).padStart(2, "0");
+      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    }
+
+    const dailyTrend = computed(() => {
+      const counts = {};
+      for (const w of words.value) {
+        const key = dateKey(new Date(w.first_added_at));
+        counts[key] = (counts[key] || 0) + 1;
+      }
+      const days = [];
+      const today = new Date();
+      for (let i = 13; i >= 0; i--) {
+        const d = new Date(today);
+        d.setDate(d.getDate() - i);
+        const key = dateKey(d);
+        const pad = (n) => String(n).padStart(2, "0");
+        days.push({
+          date: key,
+          label: `${pad(d.getMonth() + 1)}-${pad(d.getDate())}`,
+          count: counts[key] || 0,
+        });
+      }
+      return days;
+    });
+
+    const maxDailyCount = computed(() =>
+      Math.max(1, ...dailyTrend.value.map((d) => d.count))
+    );
+
+    const reviewBuckets = computed(() => {
+      const buckets = [
+        { label: "1 次", min: 1, max: 1, count: 0 },
+        { label: "2-3 次", min: 2, max: 3, count: 0 },
+        { label: "4-6 次", min: 4, max: 6, count: 0 },
+        { label: "7 次以上", min: 7, max: Infinity, count: 0 },
+      ];
+      for (const w of words.value) {
+        const b = buckets.find((b) => w.review_count >= b.min && w.review_count <= b.max);
+        if (b) b.count++;
+      }
+      return buckets;
+    });
+
+    const maxBucketCount = computed(() =>
+      Math.max(1, ...reviewBuckets.value.map((b) => b.count))
+    );
+
+    const staleWords = computed(() =>
+      [...words.value]
+        .sort((a, b) => new Date(a.last_reviewed_at) - new Date(b.last_reviewed_at))
+        .slice(0, 5)
+    );
+
+    function barHeight(count, max) {
+      const pct = max > 0 ? (count / max) * 100 : 0;
+      return `${Math.max(pct, count > 0 ? 4 : 0)}%`;
+    }
+
+    function daysSince(iso) {
+      const diffMs = Date.now() - new Date(iso).getTime();
+      return Math.max(0, Math.floor(diffMs / 86400000));
+    }
+
+    async function loadStats() {
+      try {
+        const meRes = await fetch("/api/me");
+        if (!meRes.ok) {
+          window.location.href = "/";
+          return;
+        }
+        currentUser.value = await meRes.json();
+
+        const wordsRes = await fetch("/api/words");
+        if (wordsRes.ok) {
+          words.value = await wordsRes.json();
+        }
+      } catch (e) {
+        window.location.href = "/";
+      } finally {
+        checkingAuth.value = false;
+      }
+    }
+
+    onMounted(loadStats);
+
+    return {
+      checkingAuth,
+      currentUser,
+      words,
+      totalReviews,
+      avgReviews,
+      translatingCount,
+      dailyTrend,
+      maxDailyCount,
+      reviewBuckets,
+      maxBucketCount,
+      staleWords,
+      barHeight,
+      daysSince,
+    };
+  },
+}).mount("#app");
+</script>
+</body>
+</html>
