@@ -30,6 +30,27 @@ ssh root@101.42.45.60 "cd /root/vocabulary-memorization && docker compose up -d 
 
 首次部署才需要执行 `./deploy.sh`（会自动生成 `.env` 里的随机数据库密码和超管密码），之后更新代码只需要上面第 2、3 步，`.env` 不会被覆盖。
 
+## 涉及数据库结构变更时：先备份，再部署，再验证迁移结果
+
+后端启动时的 `migrateSchema()`（`backend/db.go`）会自动、幂等地跑完所有建表 / 加列 / 历史数据回填，**不需要手工连数据库执行 SQL**。但只要这次更新涉及表结构变更（加表、加列、扫表回填一类），部署前建议按下面的顺序操作，而不是直接第 3 步覆盖重建：
+
+```bash
+# 1. 部署前先在服务器上给数据库整体备份一份（在 mysql 容器内执行，密码不会出现在本机终端里）
+ssh root@101.42.45.60 "cd /root/vocabulary-memorization && docker compose exec -T mysql sh -c 'mysqldump -uroot -p\"\$MYSQL_ROOT_PASSWORD\" --all-databases > /tmp/backup_pre_<版本号>.sql'"
+
+# 2. rsync 同步代码、docker compose up -d --build（同上）
+
+# 3. 部署后检查迁移是否跑成功：新表/新列是否存在，数据量是否符合预期
+ssh root@101.42.45.60 "cd /root/vocabulary-memorization && docker compose logs backend --tail=60"
+ssh root@101.42.45.60 "cd /root/vocabulary-memorization && docker compose exec -T mysql sh -c 'mysql -uroot -p\"\$MYSQL_ROOT_PASSWORD\" vocab -e \"SHOW TABLES; DESCRIBE <新表或改动的表>;\"'"
+
+# 4. 冒烟测试：主要页面和一个不需要登录也能验证的接口
+curl -s -o /dev/null -w "%{http_code}\n" http://101.42.45.60:39100/
+curl -s http://101.42.45.60:39100/api/me   # 未登录应返回 401，不应该 500
+```
+
+万一迁移出问题，用第 1 步的备份文件在 mysql 容器里 `mysql -uroot -p"$MYSQL_ROOT_PASSWORD" < /tmp/backup_pre_<版本号>.sql` 即可整体还原。备份文件建议部署验证通过、稳定运行几天后再手动清理，不要部署完立刻删。
+
 ## Go 模块代理：goproxy.cn
 
 `backend/Dockerfile` 里加了一行：
