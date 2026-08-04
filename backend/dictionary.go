@@ -83,3 +83,15 @@ func handleListDictionary(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, entries)
 }
+
+// handleDeleteDictionaryEntry 管理员删除全局词库里的一条缓存记录；只影响词库缓存本身，
+// 不影响任何用户已经保存在自己单词表里的记录
+func handleDeleteDictionaryEntry(w http.ResponseWriter, r *http.Request) {
+	wordKey := r.PathValue("word_key")
+	if _, err := db.Exec(`DELETE FROM word_dictionary WHERE word_key = ?`, wordKey); err != nil {
+		log.Printf("删除词库记录失败 word=%s: %v", wordKey, err)
+		writeError(w, http.StatusInternalServerError, "删除失败")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}

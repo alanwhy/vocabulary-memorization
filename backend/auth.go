@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -70,6 +71,41 @@ func createUser(username, password string, isAdmin bool) (User, error) {
 	}
 	id, _ := res.LastInsertId()
 	return User{ID: int(id), Username: username, IsAdmin: isAdmin, CreatedAt: now}, nil
+}
+
+type resetPasswordRequest struct {
+	Password string `json:"password"`
+}
+
+// handleResetUserPassword 管理员重置指定用户的密码；重置后该用户所有已登录会话立即失效，需要重新登录
+func handleResetUserPassword(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "无效的 id")
+		return
+	}
+	var req resetPasswordRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "请求格式不正确")
+		return
+	}
+	if len(req.Password) < 6 {
+		writeError(w, http.StatusBadRequest, "密码长度至少 6 位")
+		return
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	if err != nil {
+		log.Printf("生成密码哈希失败: %v", err)
+		writeError(w, http.StatusInternalServerError, "重置失败")
+		return
+	}
+	if _, err := db.Exec(`UPDATE users SET password_hash = ? WHERE id = ?`, string(hash), id); err != nil {
+		log.Printf("重置密码失败: %v", err)
+		writeError(w, http.StatusInternalServerError, "重置失败")
+		return
+	}
+	db.Exec(`DELETE FROM sessions WHERE user_id = ?`, id)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func randomToken() string {

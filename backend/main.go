@@ -38,9 +38,11 @@ func main() {
 
 	mux.HandleFunc("POST /api/admin/users", requireAdmin(handleCreateUser))
 	mux.HandleFunc("GET /api/admin/users", requireAdmin(handleListUsers))
+	mux.HandleFunc("POST /api/admin/users/{id}/reset-password", requireAdmin(handleResetUserPassword))
 	mux.HandleFunc("GET /api/admin/settings", requireAdmin(handleGetSettings))
 	mux.HandleFunc("PUT /api/admin/settings", requireAdmin(handleUpdateSettings))
 	mux.HandleFunc("GET /api/admin/dictionary", requireAdmin(handleListDictionary))
+	mux.HandleFunc("DELETE /api/admin/dictionary/{word_key}", requireAdmin(handleDeleteDictionaryEntry))
 
 	mux.Handle("/", http.FileServer(http.Dir("./static")))
 

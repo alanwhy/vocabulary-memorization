@@ -79,6 +79,16 @@
     padding: 2px 6px;
     border-radius: 5px;
   }
+  .link-btn {
+    border: none;
+    background: transparent;
+    color: var(--accent);
+    font-size: 12px;
+    cursor: pointer;
+    padding: 4px 6px;
+  }
+  .link-btn.danger { color: var(--muted); }
+  .link-btn.danger:hover { color: var(--danger); }
 </style>
 </head>
 <body>
@@ -99,12 +109,13 @@
     <h2>用户管理</h2>
     <div class="card">
       <table>
-        <thead><tr><th>用户名</th><th>角色</th><th>创建时间</th></tr></thead>
+        <thead><tr><th>用户名</th><th>角色</th><th>创建时间</th><th>操作</th></tr></thead>
         <tbody>
           <tr v-for="u in users" :key="u.id">
             <td>{{ u.username }}</td>
             <td><span class="badge" v-if="u.is_admin">超管</span><span v-else>普通用户</span></td>
             <td>{{ formatTime(u.created_at) }}</td>
+            <td><button class="link-btn" @click="resetPassword(u)">重置密码</button></td>
           </tr>
         </tbody>
       </table>
@@ -141,12 +152,13 @@
     <div class="card">
       <input type="text" v-model="dictFilter" placeholder="按单词过滤" />
       <table style="margin-top: 12px;">
-        <thead><tr><th>单词</th><th>出现次数</th><th>最后更新时间</th></tr></thead>
+        <thead><tr><th>单词</th><th>出现次数</th><th>最后更新时间</th><th>操作</th></tr></thead>
         <tbody>
           <tr v-for="d in filteredDictEntries" :key="d.word_key">
             <td>{{ d.display_word }}</td>
             <td>{{ d.occurrence_count }}</td>
             <td>{{ formatTime(d.last_updated_at) }}</td>
+            <td><button class="link-btn danger" @click="deleteDictEntry(d)">删除</button></td>
           </tr>
         </tbody>
       </table>
@@ -222,6 +234,43 @@ createApp({
       if (res.ok) dictEntries.value = await res.json();
     }
 
+    async function resetPassword(u) {
+      const pwd = prompt(`为用户「${u.username}」设置新密码（至少 6 位）：`);
+      if (pwd === null) return;
+      userMsgError.value = "";
+      userMsgOk.value = "";
+      if (pwd.length < 6) {
+        userMsgError.value = "密码长度至少 6 位";
+        return;
+      }
+      try {
+        const res = await fetch(`/api/admin/users/${u.id}/reset-password`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ password: pwd }),
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          userMsgError.value = data.error || "重置失败";
+          return;
+        }
+        userMsgOk.value = `已重置用户 ${u.username} 的密码`;
+      } catch (e) {
+        userMsgError.value = "网络错误，请重试";
+      }
+    }
+
+    async function deleteDictEntry(d) {
+      if (!confirm(`确定从词库删除「${d.display_word}」的缓存记录吗？`)) return;
+      try {
+        const res = await fetch(`/api/admin/dictionary/${encodeURIComponent(d.word_key)}`, { method: "DELETE" });
+        if (!res.ok) throw new Error();
+        dictEntries.value = dictEntries.value.filter((x) => x.word_key !== d.word_key);
+      } catch (e) {
+        alert("删除失败，请重试");
+      }
+    }
+
     async function createUser() {
       userMsgError.value = "";
       userMsgOk.value = "";
@@ -282,9 +331,9 @@ createApp({
 
     return {
       loading, isAdmin, me,
-      users, newUser, creatingUser, userMsgError, userMsgOk, createUser,
+      users, newUser, creatingUser, userMsgError, userMsgOk, createUser, resetPassword,
       dsForm, savingSettings, settingsMsgError, settingsMsgOk, saveSettings,
-      dictEntries, dictFilter, filteredDictEntries,
+      dictEntries, dictFilter, filteredDictEntries, deleteDictEntry,
       formatTime,
     };
   },
