@@ -15,6 +15,7 @@ type Word struct {
 	DisplayWord    string    `json:"display_word"`
 	Senses         []Sense   `json:"senses"`
 	Translating    bool      `json:"translating"`
+	Archived       bool      `json:"archived"`
 	ReviewCount    int       `json:"review_count"`
 	FirstAddedAt   time.Time `json:"first_added_at"`
 	LastReviewedAt time.Time `json:"last_reviewed_at"`

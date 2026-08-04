@@ -5,69 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>背单词</title>
 <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+<link rel="stylesheet" href="/common.css" />
 <style>
-  :root {
-    color-scheme: light dark;
-    --bg: #fafafa;
-    --card-bg: #ffffff;
-    --border: #e5e5e5;
-    --text: #1f2328;
-    --muted: #8a8f98;
-    --accent: #2f6f4f;
-    --accent-soft: #eaf4ee;
-    --danger: #c65b5b;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #16181c;
-      --card-bg: #1f2229;
-      --border: #33363d;
-      --text: #e6e6e6;
-      --muted: #8a8f98;
-      --accent: #5fbf8c;
-      --accent-soft: #1f3329;
-      --danger: #e08080;
-    }
-  }
-  * { box-sizing: border-box; }
-  html, body {
-    margin: 0;
-    background: var(--bg);
-    color: var(--text);
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
-  }
-  #app {
-    max-width: 720px;
-    margin: 0 auto;
-    padding: 32px 20px 80px;
-  }
-  .topbar {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 12px;
-    font-size: 13px;
-    color: var(--muted);
-  }
-  .topbar a, .topbar button {
-    color: var(--muted);
-    background: transparent;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 4px 10px;
-    font-size: 12px;
-    cursor: pointer;
-    text-decoration: none;
-    margin-left: 6px;
-  }
-  .topbar a:hover, .topbar button:hover { color: var(--accent); border-color: var(--accent); }
-  h1 {
-    font-size: 22px;
-    font-weight: 600;
-    margin: 0 0 20px;
-    text-align: center;
-    letter-spacing: 0.5px;
-  }
   .login-box {
     max-width: 360px;
     margin: 80px auto 0;
@@ -267,6 +206,15 @@
     padding: 4px 6px;
   }
   .delete-btn:hover { color: var(--danger); }
+  .archive-btn {
+    border: none;
+    background: transparent;
+    color: var(--muted);
+    font-size: 12px;
+    cursor: pointer;
+    padding: 4px 6px;
+  }
+  .archive-btn:hover { color: var(--accent); }
   .empty {
     text-align: center;
     color: var(--muted);
@@ -318,6 +266,7 @@
     <div class="topbar">
       <span>{{ currentUser.username }}</span>
       <span>
+        <a href="/archive.html">归档</a>
         <a href="/stats.html">统计</a>
         <a v-if="currentUser.is_admin" href="/admin.html">后台管理</a>
         <button @click="logout">退出登录</button>
@@ -367,6 +316,7 @@
         <div class="word-meta">
           <span class="count">×{{ w.review_count }}</span>
           <span class="time">{{ formatTime(w.last_reviewed_at) }}</span>
+          <button class="archive-btn" @click="archiveWord(w)">归档</button>
           <button class="delete-btn" @click="deleteWord(w)">删除</button>
         </div>
       </li>
@@ -377,7 +327,8 @@
   <div class="footer">v1.1.0</div>
 </div>
 
-<script>
+<script type="module">
+import { formatTime } from "/common.js";
 const { createApp, ref, reactive, computed, onMounted, nextTick } = Vue;
 
 createApp({
@@ -553,10 +504,14 @@ createApp({
       }
     }
 
-    function formatTime(iso) {
-      const d = new Date(iso);
-      const pad = (n) => String(n).padStart(2, "0");
-      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    async function archiveWord(w) {
+      try {
+        const res = await fetch(`/api/words/${w.id}/archive`, { method: "POST" });
+        if (!res.ok) throw new Error();
+        words.value = words.value.filter((x) => x.id !== w.id);
+      } catch (e) {
+        errorMsg.value = "归档失败，请重试";
+      }
     }
 
     onMounted(checkAuth);
@@ -580,6 +535,7 @@ createApp({
       setSortMode,
       submitWord,
       deleteWord,
+      archiveWord,
       formatTime,
     };
   },

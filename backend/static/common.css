@@ -1,0 +1,68 @@
+:root {
+  color-scheme: light dark;
+  --bg: #fafafa;
+  --card-bg: #ffffff;
+  --border: #e5e5e5;
+  --text: #1f2328;
+  --muted: #8a8f98;
+  --accent: #2f6f4f;
+  --accent-soft: #eaf4ee;
+  --danger: #c65b5b;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #16181c;
+    --card-bg: #1f2229;
+    --border: #33363d;
+    --text: #e6e6e6;
+    --muted: #8a8f98;
+    --accent: #5fbf8c;
+    --accent-soft: #1f3329;
+    --danger: #e08080;
+  }
+}
+* { box-sizing: border-box; }
+html, body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+#app {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 32px 20px 80px;
+}
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.topbar a, .topbar button {
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  text-decoration: none;
+  margin-left: 6px;
+}
+.topbar a:hover, .topbar button:hover { color: var(--accent); border-color: var(--accent); }
+h1 {
+  font-size: 22px;
+  font-weight: 600;
+  margin: 0 0 20px;
+  text-align: center;
+  letter-spacing: 0.5px;
+}
+.footer {
+  color: var(--muted);
+  font-size: 11px;
+  text-align: center;
+  margin-top: 24px;
+}

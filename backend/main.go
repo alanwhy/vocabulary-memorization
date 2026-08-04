@@ -33,6 +33,8 @@ func main() {
 	mux.HandleFunc("POST /api/words", requireAuth(handleAddWord))
 	mux.HandleFunc("GET /api/words", requireAuth(handleListWords))
 	mux.HandleFunc("DELETE /api/words/{id}", requireAuth(handleDeleteWord))
+	mux.HandleFunc("POST /api/words/{id}/archive", requireAuth(handleArchiveWord))
+	mux.HandleFunc("POST /api/words/{id}/unarchive", requireAuth(handleUnarchiveWord))
 
 	mux.HandleFunc("POST /api/admin/users", requireAdmin(handleCreateUser))
 	mux.HandleFunc("GET /api/admin/users", requireAdmin(handleListUsers))
@@ -130,9 +132,9 @@ func tryIncrementExisting(w http.ResponseWriter, userID int, wordKey string, now
 	var existing Word
 	var sensesRaw []byte
 	err := db.QueryRow(
-		`SELECT id, word_key, display_word, senses, translating, review_count, first_added_at, last_reviewed_at FROM words WHERE user_id = ? AND word_key = ?`,
+		`SELECT id, word_key, display_word, senses, translating, archived, review_count, first_added_at, last_reviewed_at FROM words WHERE user_id = ? AND word_key = ?`,
 		userID, wordKey,
-	).Scan(&existing.ID, &existing.WordKey, &existing.DisplayWord, &sensesRaw, &existing.Translating, &existing.ReviewCount, &existing.FirstAddedAt, &existing.LastReviewedAt)
+	).Scan(&existing.ID, &existing.WordKey, &existing.DisplayWord, &sensesRaw, &existing.Translating, &existing.Archived, &existing.ReviewCount, &existing.FirstAddedAt, &existing.LastReviewedAt)
 
 	if err == sql.ErrNoRows {
 		return false
@@ -162,9 +164,10 @@ func tryIncrementExisting(w http.ResponseWriter, userID int, wordKey string, now
 
 func handleListWords(w http.ResponseWriter, r *http.Request) {
 	user := currentUser(r)
+	archived := r.URL.Query().Get("archived") == "1"
 	rows, err := db.Query(
-		`SELECT id, word_key, display_word, senses, translating, review_count, first_added_at, last_reviewed_at FROM words WHERE user_id = ? ORDER BY review_count DESC, last_reviewed_at DESC`,
-		user.ID,
+		`SELECT id, word_key, display_word, senses, translating, archived, review_count, first_added_at, last_reviewed_at FROM words WHERE user_id = ? AND archived = ? ORDER BY review_count DESC, last_reviewed_at DESC`,
+		user.ID, archived,
 	)
 	if err != nil {
 		log.Printf("查询列表失败: %v", err)
@@ -177,7 +180,7 @@ func handleListWords(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var wd Word
 		var sensesRaw []byte
-		if err := rows.Scan(&wd.ID, &wd.WordKey, &wd.DisplayWord, &sensesRaw, &wd.Translating, &wd.ReviewCount, &wd.FirstAddedAt, &wd.LastReviewedAt); err != nil {
+		if err := rows.Scan(&wd.ID, &wd.WordKey, &wd.DisplayWord, &sensesRaw, &wd.Translating, &wd.Archived, &wd.ReviewCount, &wd.FirstAddedAt, &wd.LastReviewedAt); err != nil {
 			log.Printf("读取记录失败: %v", err)
 			continue
 		}
@@ -202,6 +205,31 @@ func handleDeleteWord(w http.ResponseWriter, r *http.Request) {
 	if _, err := db.Exec(`DELETE FROM words WHERE id = ? AND user_id = ?`, id, user.ID); err != nil {
 		log.Printf("删除失败: %v", err)
 		writeError(w, http.StatusInternalServerError, "删除失败")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func handleArchiveWord(w http.ResponseWriter, r *http.Request) {
+	setWordArchived(w, r, true)
+}
+
+func handleUnarchiveWord(w http.ResponseWriter, r *http.Request) {
+	setWordArchived(w, r, false)
+}
+
+// setWordArchived 归档/取消归档只是给单词打个标记，不涉及删除，不需要二次确认
+func setWordArchived(w http.ResponseWriter, r *http.Request, archived bool) {
+	user := currentUser(r)
+	idStr := r.PathValue("id")
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "无效的 id")
+		return
+	}
+	if _, err := db.Exec(`UPDATE words SET archived = ? WHERE id = ? AND user_id = ?`, archived, id, user.ID); err != nil {
+		log.Printf("更新归档状态失败: %v", err)
+		writeError(w, http.StatusInternalServerError, "更新失败")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

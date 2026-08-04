@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS words (
   display_word VARCHAR(255) NOT NULL,
   senses JSON,
   translating TINYINT(1) NOT NULL DEFAULT 0,
+  archived TINYINT(1) NOT NULL DEFAULT 0,
   review_count INT NOT NULL DEFAULT 1,
   first_added_at DATETIME NOT NULL,
   last_reviewed_at DATETIME NOT NULL,

@@ -73,6 +73,7 @@ func migrateSchema() {
 	migrateWordsSenses()
 	migrateWordsUserIDColumn()
 	migrateWordsTranslatingColumn()
+	migrateWordsArchivedColumn()
 }
 
 // migrateWordsSenses 给 words 表补 senses 列，并把老的 pos/translation 单值列打包迁移过去
@@ -102,6 +103,14 @@ func migrateWordsTranslatingColumn() {
 		return
 	}
 	mustExec(`ALTER TABLE words ADD COLUMN translating TINYINT(1) NOT NULL DEFAULT 0`)
+}
+
+// migrateWordsArchivedColumn 给 words 表补 archived 列，标记单词是否已被用户归档
+func migrateWordsArchivedColumn() {
+	if columnExists("words", "archived") {
+		return
+	}
+	mustExec(`ALTER TABLE words ADD COLUMN archived TINYINT(1) NOT NULL DEFAULT 0`)
 }
 
 // finalizeWordsUserID 在超管账号创建完成后调用：把迁移阶段遗留的、还没有归属的历史单词

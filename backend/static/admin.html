@@ -5,65 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>后台管理 - 背单词</title>
 <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+<link rel="stylesheet" href="/common.css" />
 <style>
-  :root {
-    color-scheme: light dark;
-    --bg: #fafafa;
-    --card-bg: #ffffff;
-    --border: #e5e5e5;
-    --text: #1f2328;
-    --muted: #8a8f98;
-    --accent: #2f6f4f;
-    --accent-soft: #eaf4ee;
-    --danger: #c65b5b;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #16181c;
-      --card-bg: #1f2229;
-      --border: #33363d;
-      --text: #e6e6e6;
-      --muted: #8a8f98;
-      --accent: #5fbf8c;
-      --accent-soft: #1f3329;
-      --danger: #e08080;
-    }
-  }
-  * { box-sizing: border-box; }
-  html, body {
-    margin: 0;
-    background: var(--bg);
-    color: var(--text);
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
-  }
-  #app {
-    max-width: 640px;
-    margin: 0 auto;
-    padding: 32px 20px 80px;
-  }
-  .topbar {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 12px;
-    font-size: 13px;
-    color: var(--muted);
-  }
-  .topbar a {
-    color: var(--muted);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 4px 10px;
-    font-size: 12px;
-    text-decoration: none;
-  }
-  .topbar a:hover { color: var(--accent); border-color: var(--accent); }
-  h1 {
-    font-size: 22px;
-    font-weight: 600;
-    margin: 0 0 20px;
-    text-align: center;
-  }
+  #app { max-width: 640px; }
   h2 {
     font-size: 16px;
     font-weight: 600;
@@ -195,7 +139,8 @@
   </template>
 </div>
 
-<script>
+<script type="module">
+import { formatTime, requireLogin } from "/common.js";
 const { createApp, ref, reactive, onMounted } = Vue;
 
 createApp({
@@ -217,12 +162,9 @@ createApp({
 
     async function init() {
       try {
-        const res = await fetch("/api/me");
-        if (!res.ok) {
-          window.location.href = "/";
-          return;
-        }
-        me.value = await res.json();
+        const user = await requireLogin();
+        if (!user) return;
+        me.value = user;
         if (!me.value.is_admin) {
           isAdmin.value = false;
           window.location.href = "/";
@@ -305,12 +247,6 @@ createApp({
       } finally {
         savingSettings.value = false;
       }
-    }
-
-    function formatTime(iso) {
-      const d = new Date(iso);
-      const pad = (n) => String(n).padStart(2, "0");
-      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
     }
 
     onMounted(init);
