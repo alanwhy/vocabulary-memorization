@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strconv"
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
@@ -30,6 +31,10 @@ func connectDB() {
 			err = db.Ping()
 		}
 		if err == nil {
+			db.SetMaxOpenConns(getEnvInt("DB_MAX_OPEN_CONNS", 25))
+			db.SetMaxIdleConns(getEnvInt("DB_MAX_IDLE_CONNS", 25))
+			db.SetConnMaxLifetime(5 * time.Minute)
+			db.SetConnMaxIdleTime(2 * time.Minute)
 			log.Println("数据库连接成功")
 			return
 		}
@@ -44,6 +49,30 @@ func getEnv(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func getEnvBool(key string, fallback bool) bool {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		return fallback
+	}
+	return b
+}
+
+func getEnvInt(key string, fallback int) int {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return fallback
+	}
+	return n
 }
 
 // migrateSchema 幂等迁移：新装机器上 schema.sql 已经建好全部表，这里的语句都是空操作；

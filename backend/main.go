@@ -1,15 +1,18 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	mysqldriver "github.com/go-sql-driver/mysql"
@@ -31,50 +34,101 @@ func spaHandler(w http.ResponseWriter, r *http.Request) {
 // wordPattern 简单校验：以英文字母开头，只允许字母、空格、连字符、单引号，长度不超过 64
 var wordPattern = regexp.MustCompile(`^[A-Za-z][A-Za-z'\- ]{0,63}$`)
 
+const (
+	defaultRequestTimeout = 10 * time.Second
+	exportRequestTimeout  = 60 * time.Second
+	shutdownTimeout       = 15 * time.Second
+	bgTaskGracePeriod     = 10 * time.Second
+)
+
 func main() {
 	connectDB()
 	defer db.Close()
 
+	app := NewApp(db, Config{CookieSecure: getEnvBool("COOKIE_SECURE", false)})
+
 	migrateSchema()
-	adminID := bootstrapAdmin()
+	adminID := app.bootstrapAdmin()
 	finalizeWordsUserID(adminID)
-	loadSettings()
+	app.loadSettings()
+	app.resumeStuckTranslations()
+
+	go app.loginLimiter.sweep(10*time.Minute, app.bgCtx.Done())
+	go app.pwLimiter.sweep(10*time.Minute, app.bgCtx.Done())
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /api/login", handleLogin)
-	mux.HandleFunc("POST /api/logout", handleLogout)
-	mux.HandleFunc("GET /api/me", requireAuth(handleMe))
-	mux.HandleFunc("PUT /api/me/password", requireAuth(handleChangePassword))
+	mux.HandleFunc("POST /api/login", withTimeout(defaultRequestTimeout)(app.handleLogin))
+	mux.HandleFunc("POST /api/logout", withTimeout(defaultRequestTimeout)(app.handleLogout))
+	mux.HandleFunc("GET /api/me", withTimeout(defaultRequestTimeout)(app.requireAuth(app.handleMe)))
+	mux.HandleFunc("PUT /api/me/password", withTimeout(defaultRequestTimeout)(app.requireAuth(app.handleChangePassword)))
 
-	mux.HandleFunc("POST /api/words", requireAuth(handleAddWord))
-	mux.HandleFunc("GET /api/words", requireAuth(handleListWords))
-	mux.HandleFunc("DELETE /api/words/{id}", requireAuth(handleDeleteWord))
-	mux.HandleFunc("POST /api/words/{id}/archive", requireAuth(handleArchiveWord))
-	mux.HandleFunc("POST /api/words/{id}/unarchive", requireAuth(handleUnarchiveWord))
+	mux.HandleFunc("POST /api/words", withTimeout(defaultRequestTimeout)(app.requireAuth(app.handleAddWord)))
+	mux.HandleFunc("GET /api/words", withTimeout(defaultRequestTimeout)(app.requireAuth(app.handleListWords)))
+	mux.HandleFunc("DELETE /api/words/{id}", withTimeout(defaultRequestTimeout)(app.requireAuth(app.handleDeleteWord)))
+	mux.HandleFunc("POST /api/words/{id}/archive", withTimeout(defaultRequestTimeout)(app.requireAuth(app.handleArchiveWord)))
+	mux.HandleFunc("POST /api/words/{id}/unarchive", withTimeout(defaultRequestTimeout)(app.requireAuth(app.handleUnarchiveWord)))
 
-	mux.HandleFunc("POST /api/admin/users", requireAdmin(handleCreateUser))
-	mux.HandleFunc("GET /api/admin/users", requireAdmin(handleListUsers))
-	mux.HandleFunc("POST /api/admin/users/{id}/reset-password", requireAdmin(handleResetUserPassword))
-	mux.HandleFunc("GET /api/admin/settings", requireAdmin(handleGetSettings))
-	mux.HandleFunc("PUT /api/admin/settings", requireAdmin(handleUpdateSettings))
-	mux.HandleFunc("GET /api/admin/dictionary", requireAdmin(handleListDictionary))
-	mux.HandleFunc("GET /api/admin/dictionary/export", requireAdmin(handleExportDictionary))
-	mux.HandleFunc("DELETE /api/admin/dictionary/{word_key}", requireAdmin(handleDeleteDictionaryEntry))
+	mux.HandleFunc("POST /api/admin/users", withTimeout(defaultRequestTimeout)(app.requireAdmin(app.handleCreateUser)))
+	mux.HandleFunc("GET /api/admin/users", withTimeout(defaultRequestTimeout)(app.requireAdmin(app.handleListUsers)))
+	mux.HandleFunc("POST /api/admin/users/{id}/reset-password", withTimeout(defaultRequestTimeout)(app.requireAdmin(app.handleResetUserPassword)))
+	mux.HandleFunc("GET /api/admin/settings", withTimeout(defaultRequestTimeout)(app.requireAdmin(app.handleGetSettings)))
+	mux.HandleFunc("PUT /api/admin/settings", withTimeout(defaultRequestTimeout)(app.requireAdmin(app.handleUpdateSettings)))
+	mux.HandleFunc("GET /api/admin/dictionary", withTimeout(defaultRequestTimeout)(app.requireAdmin(app.handleListDictionary)))
+	mux.HandleFunc("GET /api/admin/dictionary/export", withTimeout(exportRequestTimeout)(app.requireAdmin(app.handleExportDictionary)))
+	mux.HandleFunc("DELETE /api/admin/dictionary/{word_key}", withTimeout(defaultRequestTimeout)(app.requireAdmin(app.handleDeleteDictionaryEntry)))
 
 	mux.HandleFunc("/", spaHandler)
 
-	addr := ":8080"
-	log.Printf("服务启动，监听 %s", addr)
-	if err := http.ListenAndServe(addr, mux); err != nil {
-		log.Fatalf("服务启动失败: %v", err)
+	srv := &http.Server{
+		Addr:         ":8080",
+		Handler:      recoverMiddleware(mux),
+		ReadTimeout:  15 * time.Second,
+		WriteTimeout: 30 * time.Second,
+		IdleTimeout:  60 * time.Second,
 	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	go func() {
+		log.Printf("服务启动，监听 %s", srv.Addr)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("服务启动失败: %v", err)
+		}
+	}()
+
+	<-ctx.Done()
+	log.Println("收到关闭信号，开始优雅关闭...")
+
+	// 先让后台查词任务停止等待/重试，再关 HTTP 服务，减少新增在途任务
+	app.bgCancel()
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		log.Printf("优雅关闭 HTTP 服务失败: %v", err)
+	}
+
+	waitDone := make(chan struct{})
+	go func() {
+		app.translateWG.Wait()
+		close(waitDone)
+	}()
+	select {
+	case <-waitDone:
+		log.Println("后台查词任务已全部完成")
+	case <-time.After(bgTaskGracePeriod):
+		log.Println("等待后台查词任务超时，放弃剩余任务")
+	}
+
+	log.Println("服务已关闭")
 }
 
 type addWordRequest struct {
 	Word string `json:"word"`
 }
 
-func handleAddWord(w http.ResponseWriter, r *http.Request) {
+func (a *App) handleAddWord(w http.ResponseWriter, r *http.Request) {
 	user := currentUser(r)
 
 	var req addWordRequest
@@ -95,15 +149,15 @@ func handleAddWord(w http.ResponseWriter, r *http.Request) {
 	now := time.Now()
 
 	// 已存在则次数 +1 并直接返回
-	if handled := tryIncrementExisting(w, user.ID, wordKey, now); handled {
+	if handled := a.tryIncrementExisting(w, r, user.ID, wordKey, now); handled {
 		return
 	}
 
 	// 不管是不是这个用户第一次输入，先登记一次全局词库的出现次数
-	upsertDictionaryOccurrence(wordKey, raw, now)
+	a.upsertDictionaryOccurrence(r.Context(), wordKey, raw, now)
 
 	// 全局词库如果已经缓存过这个词的释义，直接复用，不用再问一次大模型
-	cachedSenses, cacheHit := lookupDictionarySenses(wordKey)
+	cachedSenses, cacheHit := a.lookupDictionarySenses(r.Context(), wordKey)
 	initialSenses := []Sense{}
 	if cacheHit {
 		initialSenses = cachedSenses
@@ -113,14 +167,11 @@ func handleAddWord(w http.ResponseWriter, r *http.Request) {
 		sensesJSON = []byte("[]")
 	}
 
-	res, err := db.Exec(
-		`INSERT INTO words (user_id, word_key, display_word, senses, translating, review_count, first_added_at, last_reviewed_at) VALUES (?, ?, ?, ?, ?, 1, ?, ?)`,
-		user.ID, wordKey, raw, sensesJSON, !cacheHit, now, now,
-	)
+	wordID, err := a.words.Insert(r.Context(), user.ID, wordKey, raw, sensesJSON, !cacheHit, now)
 	if err != nil {
 		// 并发下可能有另一个请求刚好抢先插入了同一个单词，退化为累加次数
 		if mysqlErr, ok := err.(*mysqldriver.MySQLError); ok && mysqlErr.Number == 1062 {
-			if handled := tryIncrementExisting(w, user.ID, wordKey, now); handled {
+			if handled := a.tryIncrementExisting(w, r, user.ID, wordKey, now); handled {
 				return
 			}
 		}
@@ -128,11 +179,9 @@ func handleAddWord(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "保存失败")
 		return
 	}
-	id, _ := res.LastInsertId()
-	wordID := int(id)
 
 	if !cacheHit {
-		go translateAndSave(wordID, wordKey)
+		a.spawnTranslation(wordID, wordKey)
 	}
 
 	newWord := Word{
@@ -151,48 +200,87 @@ func handleAddWord(w http.ResponseWriter, r *http.Request) {
 // translateRetryDelays 查词失败时的重试间隔（指数退避），用完仍失败才彻底放弃
 var translateRetryDelays = []time.Duration{2 * time.Second, 4 * time.Second, 8 * time.Second, 16 * time.Second, 30 * time.Second}
 
+// spawnTranslation 以受信号量限流、可被进程关闭信号取消的方式启动后台查词任务；
+// 信号量获取是阻塞式的（不丢弃），避免单词永久卡在 translating=1 无法自愈。
+func (a *App) spawnTranslation(wordID int, wordKey string) {
+	a.translateWG.Add(1)
+	go func() {
+		defer a.translateWG.Done()
+		defer func() {
+			if rec := recover(); rec != nil {
+				log.Printf("后台查词任务发生 panic word=%s: %v", wordKey, rec)
+			}
+		}()
+
+		select {
+		case a.translateSem <- struct{}{}:
+		case <-a.bgCtx.Done():
+			log.Printf("进程正在关闭，取消尚未开始的查词任务 word=%s", wordKey)
+			return
+		}
+		defer func() { <-a.translateSem }()
+
+		a.translateAndSave(a.bgCtx, wordID, wordKey)
+	}()
+}
+
+// resumeStuckTranslations 扫描进程重启前 translating=1 却没能写回释义的记录，重新触发查词，
+// 否则这些单词会永久卡在“翻译中”状态，没有其它机制能让它们自愈。
+func (a *App) resumeStuckTranslations() {
+	stuck, err := a.words.FindTranslating(context.Background())
+	if err != nil {
+		log.Printf("扫描未完成的查词任务失败: %v", err)
+		return
+	}
+	for _, wd := range stuck {
+		log.Printf("重新触发进程重启前未完成的查词任务 word=%s", wd.WordKey)
+		a.spawnTranslation(wd.ID, wd.WordKey)
+	}
+}
+
 // translateAndSave 在后台异步查词，查完再把释义写回数据库和全局词库缓存，不阻塞单词的录入请求；
-// 查词失败会按退避间隔重试，避免偶发失败导致释义永久空白
-func translateAndSave(wordID int, wordKey string) {
+// 查词失败会按退避间隔重试，避免偶发失败导致释义永久空白；ctx 取消时（进程关闭）提前退出。
+func (a *App) translateAndSave(ctx context.Context, wordID int, wordKey string) {
 	for attempt := 0; ; attempt++ {
-		result := translateWord(wordKey)
+		cfg := a.getDeepSeekConfig()
+		result := translateWord(ctx, wordKey, cfg)
 		merged := mergeSensesByPos(result.Senses)
 		if len(merged) > 0 {
-			saveWordSenses(wordID, wordKey, merged)
-			saveDictionarySenses(wordKey, merged)
+			a.saveWordSenses(ctx, wordID, wordKey, merged)
+			a.saveDictionarySenses(ctx, wordKey, merged)
 			return
 		}
 		if attempt >= len(translateRetryDelays) {
 			log.Printf("查词多次重试后仍失败，放弃 word=%s", wordKey)
-			saveWordSenses(wordID, wordKey, []Sense{})
+			a.saveWordSenses(ctx, wordID, wordKey, []Sense{})
 			return
 		}
 		delay := translateRetryDelays[attempt]
 		log.Printf("查词失败，%s 后重试 word=%s attempt=%d", delay, wordKey, attempt+1)
-		time.Sleep(delay)
+		select {
+		case <-time.After(delay):
+		case <-ctx.Done():
+			log.Printf("进程正在关闭，取消等待重试的查词任务 word=%s", wordKey)
+			return
+		}
 	}
 }
 
-func saveWordSenses(wordID int, wordKey string, senses []Sense) {
+func (a *App) saveWordSenses(ctx context.Context, wordID int, wordKey string, senses []Sense) {
 	sensesJSON, err := json.Marshal(senses)
 	if err != nil {
 		log.Printf("序列化释义失败 word=%s: %v", wordKey, err)
 		sensesJSON = []byte("[]")
 	}
-	if _, err := db.Exec(`UPDATE words SET senses = ?, translating = 0 WHERE id = ?`, sensesJSON, wordID); err != nil {
+	if err := a.words.UpdateSenses(ctx, wordID, sensesJSON); err != nil {
 		log.Printf("写回释义失败 word=%s id=%d: %v", wordKey, wordID, err)
 	}
 }
 
 // tryIncrementExisting 如果当前用户名下 wordKey 已存在，则次数 +1、更新最近背诵时间，并写响应；
 // 返回 true 表示请求已经处理完毕（无论是成功还是出错），调用方不需要再做任何事。
-func tryIncrementExisting(w http.ResponseWriter, userID int, wordKey string, now time.Time) bool {
-	var existing Word
-	var sensesRaw []byte
-	err := db.QueryRow(
-		`SELECT id, word_key, display_word, senses, translating, archived, review_count, first_added_at, last_reviewed_at FROM words WHERE user_id = ? AND word_key = ?`,
-		userID, wordKey,
-	).Scan(&existing.ID, &existing.WordKey, &existing.DisplayWord, &sensesRaw, &existing.Translating, &existing.Archived, &existing.ReviewCount, &existing.FirstAddedAt, &existing.LastReviewedAt)
+func (a *App) tryIncrementExisting(w http.ResponseWriter, r *http.Request, userID int, wordKey string, now time.Time) bool {
+	existing, sensesRaw, err := a.words.FindByUserAndKey(r.Context(), userID, wordKey)
 
 	if err == sql.ErrNoRows {
 		return false
@@ -209,51 +297,31 @@ func tryIncrementExisting(w http.ResponseWriter, userID int, wordKey string, now
 	}
 
 	newCount := existing.ReviewCount + 1
-	if _, err := db.Exec(`UPDATE words SET review_count = ?, last_reviewed_at = ? WHERE id = ?`, newCount, now, existing.ID); err != nil {
+	if err := a.words.IncrementReview(r.Context(), existing.ID, newCount, now); err != nil {
 		log.Printf("更新单词失败: %v", err)
 		writeError(w, http.StatusInternalServerError, "更新失败")
 		return true
 	}
-	upsertDictionaryOccurrence(existing.WordKey, existing.DisplayWord, now)
+	a.upsertDictionaryOccurrence(r.Context(), existing.WordKey, existing.DisplayWord, now)
 	existing.ReviewCount = newCount
 	existing.LastReviewedAt = now
 	writeJSON(w, http.StatusOK, existing)
 	return true
 }
 
-func handleListWords(w http.ResponseWriter, r *http.Request) {
+func (a *App) handleListWords(w http.ResponseWriter, r *http.Request) {
 	user := currentUser(r)
 	archived := r.URL.Query().Get("archived") == "1"
-	rows, err := db.Query(
-		`SELECT id, word_key, display_word, senses, translating, archived, review_count, first_added_at, last_reviewed_at FROM words WHERE user_id = ? AND archived = ? ORDER BY review_count DESC, last_reviewed_at DESC`,
-		user.ID, archived,
-	)
+	list, err := a.words.List(r.Context(), user.ID, archived)
 	if err != nil {
 		log.Printf("查询列表失败: %v", err)
 		writeError(w, http.StatusInternalServerError, "查询失败")
 		return
 	}
-	defer rows.Close()
-
-	list := []Word{}
-	for rows.Next() {
-		var wd Word
-		var sensesRaw []byte
-		if err := rows.Scan(&wd.ID, &wd.WordKey, &wd.DisplayWord, &sensesRaw, &wd.Translating, &wd.Archived, &wd.ReviewCount, &wd.FirstAddedAt, &wd.LastReviewedAt); err != nil {
-			log.Printf("读取记录失败: %v", err)
-			continue
-		}
-		if len(sensesRaw) > 0 {
-			if err := json.Unmarshal(sensesRaw, &wd.Senses); err != nil {
-				log.Printf("解析释义失败: %v", err)
-			}
-		}
-		list = append(list, wd)
-	}
 	writeJSON(w, http.StatusOK, list)
 }
 
-func handleDeleteWord(w http.ResponseWriter, r *http.Request) {
+func (a *App) handleDeleteWord(w http.ResponseWriter, r *http.Request) {
 	user := currentUser(r)
 	idStr := r.PathValue("id")
 	id, err := strconv.Atoi(idStr)
@@ -261,24 +329,29 @@ func handleDeleteWord(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "无效的 id")
 		return
 	}
-	if _, err := db.Exec(`DELETE FROM words WHERE id = ? AND user_id = ?`, id, user.ID); err != nil {
+	affected, err := a.words.Delete(r.Context(), id, user.ID)
+	if err != nil {
 		log.Printf("删除失败: %v", err)
 		writeError(w, http.StatusInternalServerError, "删除失败")
+		return
+	}
+	if affected == 0 {
+		writeError(w, http.StatusNotFound, "单词不存在")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func handleArchiveWord(w http.ResponseWriter, r *http.Request) {
-	setWordArchived(w, r, true)
+func (a *App) handleArchiveWord(w http.ResponseWriter, r *http.Request) {
+	a.setWordArchived(w, r, true)
 }
 
-func handleUnarchiveWord(w http.ResponseWriter, r *http.Request) {
-	setWordArchived(w, r, false)
+func (a *App) handleUnarchiveWord(w http.ResponseWriter, r *http.Request) {
+	a.setWordArchived(w, r, false)
 }
 
 // setWordArchived 归档/取消归档只是给单词打个标记，不涉及删除，不需要二次确认
-func setWordArchived(w http.ResponseWriter, r *http.Request, archived bool) {
+func (a *App) setWordArchived(w http.ResponseWriter, r *http.Request, archived bool) {
 	user := currentUser(r)
 	idStr := r.PathValue("id")
 	id, err := strconv.Atoi(idStr)
@@ -286,9 +359,14 @@ func setWordArchived(w http.ResponseWriter, r *http.Request, archived bool) {
 		writeError(w, http.StatusBadRequest, "无效的 id")
 		return
 	}
-	if _, err := db.Exec(`UPDATE words SET archived = ? WHERE id = ? AND user_id = ?`, archived, id, user.ID); err != nil {
+	affected, err := a.words.SetArchived(r.Context(), id, user.ID, archived)
+	if err != nil {
 		log.Printf("更新归档状态失败: %v", err)
 		writeError(w, http.StatusInternalServerError, "更新失败")
+		return
+	}
+	if affected == 0 {
+		writeError(w, http.StatusNotFound, "单词不存在")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -300,7 +378,7 @@ type createUserRequest struct {
 	IsAdmin  bool   `json:"is_admin"`
 }
 
-func handleCreateUser(w http.ResponseWriter, r *http.Request) {
+func (a *App) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	var req createUserRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "请求格式不正确")
@@ -316,7 +394,7 @@ func handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := createUser(username, req.Password, req.IsAdmin)
+	user, err := a.createUser(r.Context(), username, req.Password, req.IsAdmin)
 	if err != nil {
 		if mysqlErr, ok := err.(*mysqldriver.MySQLError); ok && mysqlErr.Number == 1062 {
 			writeError(w, http.StatusConflict, "用户名已存在")
@@ -329,23 +407,12 @@ func handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, user)
 }
 
-func handleListUsers(w http.ResponseWriter, r *http.Request) {
-	rows, err := db.Query(`SELECT id, username, is_admin, created_at FROM users ORDER BY id`)
+func (a *App) handleListUsers(w http.ResponseWriter, r *http.Request) {
+	list, err := a.users.List(r.Context())
 	if err != nil {
 		log.Printf("查询用户列表失败: %v", err)
 		writeError(w, http.StatusInternalServerError, "查询失败")
 		return
-	}
-	defer rows.Close()
-
-	list := []User{}
-	for rows.Next() {
-		var u User
-		if err := rows.Scan(&u.ID, &u.Username, &u.IsAdmin, &u.CreatedAt); err != nil {
-			log.Printf("读取用户记录失败: %v", err)
-			continue
-		}
-		list = append(list, u)
 	}
 	writeJSON(w, http.StatusOK, list)
 }

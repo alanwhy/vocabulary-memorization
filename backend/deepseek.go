@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -32,8 +33,7 @@ type deepseekChatResponse struct {
 
 // lookupDeepSeek 调用 DeepSeek 的 chat completions 接口查询单词的词性和释义，
 // 一个词性对应一条 Sense，一个单词可能返回多条
-func lookupDeepSeek(word string) ([]Sense, error) {
-	cfg := getDeepSeekConfig()
+func lookupDeepSeek(ctx context.Context, word string, cfg deepseekConfig) ([]Sense, error) {
 	if !cfg.Enabled {
 		return nil, fmt.Errorf("deepseek 未启用")
 	}
@@ -56,7 +56,7 @@ func lookupDeepSeek(word string) ([]Sense, error) {
 		return nil, err
 	}
 
-	req, err := http.NewRequest("POST", cfg.BaseURL+"/chat/completions", bytes.NewReader(payload))
+	req, err := http.NewRequestWithContext(ctx, "POST", cfg.BaseURL+"/chat/completions", bytes.NewReader(payload))
 	if err != nil {
 		return nil, err
 	}

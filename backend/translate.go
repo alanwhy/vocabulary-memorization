@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -21,14 +22,14 @@ var httpClient = &http.Client{Timeout: 5 * time.Second}
 
 // translateWord 依次尝试：DeepSeek（若已配置并启用） -> 在线免费接口兜底。
 // 即使翻译失败，也不会阻塞记录单词本身（调用方仍会把单词存进数据库，只是释义留空）。
-func translateWord(wordKey string) translateResult {
-	if senses, err := lookupDeepSeek(wordKey); err == nil {
+func translateWord(ctx context.Context, wordKey string, cfg deepseekConfig) translateResult {
+	if senses, err := lookupDeepSeek(ctx, wordKey, cfg); err == nil {
 		return translateResult{Senses: senses, Source: "deepseek"}
 	} else {
 		log.Printf("deepseek 查词失败 word=%s err=%v", wordKey, err)
 	}
 
-	translation, err := translateOnline(wordKey)
+	translation, err := translateOnline(ctx, wordKey)
 	if err != nil {
 		log.Printf("在线翻译失败 word=%s err=%v", wordKey, err)
 		return translateResult{Senses: nil, Source: "none"}
@@ -38,9 +39,9 @@ func translateWord(wordKey string) translateResult {
 
 // 说明：这是 Google 翻译免注册、免 API Key 的公开网页接口，未来如需更稳定的翻译效果，
 // 可以在此文件里新增一个使用百度翻译开放平台/有道智云正式 API Key 的实现，替换掉 translateOnline 即可。
-func translateOnline(word string) (string, error) {
+func translateOnline(ctx context.Context, word string) (string, error) {
 	endpoint := "https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=zh-CN&dt=t&q=" + url.QueryEscape(word)
-	req, err := http.NewRequest("GET", endpoint, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", endpoint, nil)
 	if err != nil {
 		return "", err
 	}

@@ -129,7 +129,7 @@ onMounted(() => {
         @delete="deleteWord"
       />
     </div>
-    <div class="footer">v1.5.1</div>
+    <div class="footer">v1.6.0</div>
   </div>
 </template>
 

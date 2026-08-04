@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"log"
 	"math/big"
+	"net"
 	"net/http"
 	"os"
 	"strconv"
@@ -31,9 +32,10 @@ type loginRequest struct {
 
 // bootstrapAdmin 确保至少存在一个超管账号；如果没有，用环境变量里的用户名密码创建一个。
 // 返回超管的 user id，供历史数据迁移时兜底使用。
-func bootstrapAdmin() int {
-	var count int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM users WHERE is_admin = 1`).Scan(&count); err != nil {
+func (a *App) bootstrapAdmin() int {
+	ctx := context.Background()
+	count, err := a.users.CountAdmins(ctx)
+	if err != nil {
 		log.Fatalf("查询超管账号失败: %v", err)
 	}
 
@@ -44,34 +46,25 @@ func bootstrapAdmin() int {
 			password = randomToken()[:16]
 			log.Printf("未设置 ADMIN_PASSWORD，随机生成了超管密码，请妥善记录：用户名=%s 密码=%s", username, password)
 		}
-		if _, err := createUser(username, password, true); err != nil {
+		if _, err := a.createUser(ctx, username, password, true); err != nil {
 			log.Fatalf("创建超管账号失败: %v", err)
 		}
 		log.Printf("超管账号已创建：%s", username)
 	}
 
-	var adminID int
-	if err := db.QueryRow(`SELECT id FROM users WHERE is_admin = 1 ORDER BY id LIMIT 1`).Scan(&adminID); err != nil {
+	adminID, err := a.users.FirstAdminID(ctx)
+	if err != nil {
 		log.Fatalf("读取超管账号失败: %v", err)
 	}
 	return adminID
 }
 
-func createUser(username, password string, isAdmin bool) (User, error) {
+func (a *App) createUser(ctx context.Context, username, password string, isAdmin bool) (User, error) {
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
 		return User{}, err
 	}
-	now := time.Now()
-	res, err := db.Exec(
-		`INSERT INTO users (username, password_hash, is_admin, created_at) VALUES (?, ?, ?, ?)`,
-		username, string(hash), isAdmin, now,
-	)
-	if err != nil {
-		return User{}, err
-	}
-	id, _ := res.LastInsertId()
-	return User{ID: int(id), Username: username, IsAdmin: isAdmin, CreatedAt: now}, nil
+	return a.users.Insert(ctx, username, string(hash), isAdmin, time.Now())
 }
 
 // passwordCharset 生成随机密码用的字符集，避开容易混淆的字符（0/O、1/l/I）
@@ -91,7 +84,7 @@ func generateRandomPassword(length int) string {
 
 // handleResetUserPassword 管理员重置指定用户的密码：后端自动生成随机密码并返回明文供管理员复制，
 // 重置后该用户所有已登录会话立即失效，需要用新密码重新登录
-func handleResetUserPassword(w http.ResponseWriter, r *http.Request) {
+func (a *App) handleResetUserPassword(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.Atoi(r.PathValue("id"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "无效的 id")
@@ -104,12 +97,19 @@ func handleResetUserPassword(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "重置失败")
 		return
 	}
-	if _, err := db.Exec(`UPDATE users SET password_hash = ? WHERE id = ?`, string(hash), id); err != nil {
+	affected, err := a.users.UpdatePasswordHash(r.Context(), id, string(hash))
+	if err != nil {
 		log.Printf("重置密码失败: %v", err)
 		writeError(w, http.StatusInternalServerError, "重置失败")
 		return
 	}
-	db.Exec(`DELETE FROM sessions WHERE user_id = ?`, id)
+	if affected == 0 {
+		writeError(w, http.StatusNotFound, "用户不存在")
+		return
+	}
+	if err := a.sessions.DeleteByUser(r.Context(), id); err != nil {
+		log.Printf("清除会话失败 user_id=%d: %v", id, err)
+	}
 	writeJSON(w, http.StatusOK, map[string]string{"password": newPassword})
 }
 
@@ -118,9 +118,17 @@ type changePasswordRequest struct {
 	NewPassword string `json:"new_password"`
 }
 
-// handleChangePassword 登录用户自助修改自己的密码，需要正确提供旧密码；当前会话仍然有效
-func handleChangePassword(w http.ResponseWriter, r *http.Request) {
+// handleChangePassword 登录用户自助修改自己的密码，需要正确提供旧密码；当前会话仍然有效，
+// 其它已登录的会话会被清除，防止密码泄露后攻击者持有的旧会话继续可用。
+func (a *App) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	user := currentUser(r)
+
+	limiterKey := "uid:" + strconv.Itoa(user.ID)
+	if a.pwLimiter.Locked(limiterKey) {
+		writeError(w, http.StatusTooManyRequests, "尝试次数过多，请稍后再试")
+		return
+	}
+
 	var req changePasswordRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "请求格式不正确")
@@ -130,26 +138,35 @@ func handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "新密码长度至少 6 位")
 		return
 	}
-	var hash string
-	if err := db.QueryRow(`SELECT password_hash FROM users WHERE id = ?`, user.ID).Scan(&hash); err != nil {
+	hash, err := a.users.FindPasswordHash(r.Context(), user.ID)
+	if err != nil {
 		log.Printf("查询密码失败: %v", err)
 		writeError(w, http.StatusInternalServerError, "修改失败")
 		return
 	}
 	if bcrypt.CompareHashAndPassword([]byte(hash), []byte(req.OldPassword)) != nil {
+		a.pwLimiter.RecordFailure(limiterKey)
 		writeError(w, http.StatusBadRequest, "原密码错误")
 		return
 	}
+	a.pwLimiter.Reset(limiterKey)
 	newHash, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
 	if err != nil {
 		log.Printf("生成密码哈希失败: %v", err)
 		writeError(w, http.StatusInternalServerError, "修改失败")
 		return
 	}
-	if _, err := db.Exec(`UPDATE users SET password_hash = ? WHERE id = ?`, string(newHash), user.ID); err != nil {
+	if _, err := a.users.UpdatePasswordHash(r.Context(), user.ID, string(newHash)); err != nil {
 		log.Printf("更新密码失败: %v", err)
 		writeError(w, http.StatusInternalServerError, "修改失败")
 		return
+	}
+	if cookie, err := r.Cookie(sessionCookieName); err == nil {
+		if err := a.sessions.DeleteByUserExcept(r.Context(), user.ID, cookie.Value); err != nil {
+			log.Printf("清除旧会话失败 user_id=%d: %v", user.ID, err)
+		}
+	} else if err := a.sessions.DeleteByUser(r.Context(), user.ID); err != nil {
+		log.Printf("清除旧会话失败 user_id=%d: %v", user.ID, err)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -162,22 +179,25 @@ func randomToken() string {
 	return hex.EncodeToString(buf)
 }
 
-func handleLogin(w http.ResponseWriter, r *http.Request) {
+func (a *App) handleLogin(w http.ResponseWriter, r *http.Request) {
 	var req loginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "请求格式不正确")
 		return
 	}
 	username := strings.TrimSpace(req.Username)
+	ipKey := "ip:" + clientIP(r)
+	userKey := "user:" + strings.ToLower(username)
+	if a.loginLimiter.Locked(ipKey) || a.loginLimiter.Locked(userKey) {
+		writeError(w, http.StatusTooManyRequests, "尝试次数过多，请稍后再试")
+		return
+	}
 
-	var user User
-	var hash string
-	err := db.QueryRow(
-		`SELECT id, username, password_hash, is_admin, created_at FROM users WHERE username = ?`,
-		username,
-	).Scan(&user.ID, &user.Username, &hash, &user.IsAdmin, &user.CreatedAt)
+	user, hash, err := a.users.FindByUsername(r.Context(), username)
 
 	if err == sql.ErrNoRows {
+		a.loginLimiter.RecordFailure(ipKey)
+		a.loginLimiter.RecordFailure(userKey)
 		writeError(w, http.StatusUnauthorized, "用户名或密码错误")
 		return
 	}
@@ -187,17 +207,18 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if bcrypt.CompareHashAndPassword([]byte(hash), []byte(req.Password)) != nil {
+		a.loginLimiter.RecordFailure(ipKey)
+		a.loginLimiter.RecordFailure(userKey)
 		writeError(w, http.StatusUnauthorized, "用户名或密码错误")
 		return
 	}
+	a.loginLimiter.Reset(ipKey)
+	a.loginLimiter.Reset(userKey)
 
 	token := randomToken()
 	now := time.Now()
 	expiresAt := now.Add(sessionTTL)
-	if _, err := db.Exec(
-		`INSERT INTO sessions (token, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)`,
-		token, user.ID, expiresAt, now,
-	); err != nil {
+	if err := a.sessions.Create(r.Context(), token, user.ID, expiresAt, now); err != nil {
 		log.Printf("创建会话失败: %v", err)
 		writeError(w, http.StatusInternalServerError, "登录失败")
 		return
@@ -209,14 +230,17 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 		Path:     "/",
 		Expires:  expiresAt,
 		HttpOnly: true,
+		Secure:   a.cfg.CookieSecure,
 		SameSite: http.SameSiteLaxMode,
 	})
 	writeJSON(w, http.StatusOK, user)
 }
 
-func handleLogout(w http.ResponseWriter, r *http.Request) {
+func (a *App) handleLogout(w http.ResponseWriter, r *http.Request) {
 	if cookie, err := r.Cookie(sessionCookieName); err == nil {
-		db.Exec(`DELETE FROM sessions WHERE token = ?`, cookie.Value)
+		if err := a.sessions.DeleteByToken(r.Context(), cookie.Value); err != nil {
+			log.Printf("清除会话失败: %v", err)
+		}
 	}
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,
@@ -224,12 +248,23 @@ func handleLogout(w http.ResponseWriter, r *http.Request) {
 		Path:     "/",
 		Expires:  time.Unix(0, 0),
 		HttpOnly: true,
+		Secure:   a.cfg.CookieSecure,
 		SameSite: http.SameSiteLaxMode,
 	})
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func handleMe(w http.ResponseWriter, r *http.Request) {
+// clientIP 提取客户端 IP 用于登录限流；当前部署无反向代理，直接读 RemoteAddr，
+// 如果未来接入反代需要改读 X-Forwarded-For，并需确认该 header 可信（避免伪造绕过限流）。
+func clientIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
+}
+
+func (a *App) handleMe(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, currentUser(r))
 }
 
@@ -241,7 +276,7 @@ func currentUser(r *http.Request) *User {
 
 // requireAuth 校验会话 cookie，未登录返回 401；登录成功后把用户信息塞进 context 供后续 handler 使用，
 // 同时按滑动过期策略续期会话。
-func requireAuth(next http.HandlerFunc) http.HandlerFunc {
+func (a *App) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		cookie, err := r.Cookie(sessionCookieName)
 		if err != nil {
@@ -249,14 +284,7 @@ func requireAuth(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		var user User
-		var expiresAt time.Time
-		err = db.QueryRow(
-			`SELECT u.id, u.username, u.is_admin, u.created_at, s.expires_at
-			 FROM sessions s JOIN users u ON u.id = s.user_id
-			 WHERE s.token = ?`,
-			cookie.Value,
-		).Scan(&user.ID, &user.Username, &user.IsAdmin, &user.CreatedAt, &expiresAt)
+		user, expiresAt, err := a.sessions.FindWithUser(r.Context(), cookie.Value)
 
 		if err == sql.ErrNoRows || (err == nil && time.Now().After(expiresAt)) {
 			writeError(w, http.StatusUnauthorized, "请先登录")
@@ -269,7 +297,9 @@ func requireAuth(next http.HandlerFunc) http.HandlerFunc {
 		}
 
 		newExpiry := time.Now().Add(sessionTTL)
-		db.Exec(`UPDATE sessions SET expires_at = ? WHERE token = ?`, newExpiry, cookie.Value)
+		if err := a.sessions.Touch(r.Context(), cookie.Value, newExpiry); err != nil {
+			log.Printf("续期会话失败: %v", err)
+		}
 
 		ctx := context.WithValue(r.Context(), userContextKey, &user)
 		next(w, r.WithContext(ctx))
@@ -277,8 +307,8 @@ func requireAuth(next http.HandlerFunc) http.HandlerFunc {
 }
 
 // requireAdmin 在 requireAuth 基础上再要求当前用户是超管
-func requireAdmin(next http.HandlerFunc) http.HandlerFunc {
-	return requireAuth(func(w http.ResponseWriter, r *http.Request) {
+func (a *App) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
+	return a.requireAuth(func(w http.ResponseWriter, r *http.Request) {
 		if !currentUser(r).IsAdmin {
 			writeError(w, http.StatusForbidden, "无权限")
 			return
