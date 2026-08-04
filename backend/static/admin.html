@@ -5,6 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>后台管理 - 背单词</title>
 <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+<link rel="stylesheet" href="https://unpkg.com/element-plus/dist/index.css" />
+<script src="https://unpkg.com/element-plus/dist/index.full.js"></script>
+<script src="https://unpkg.com/element-plus/dist/locale/zh-cn.js"></script>
 <link rel="stylesheet" href="/common.css" />
 <style>
   #app { max-width: 640px; }
@@ -89,6 +92,48 @@
   }
   .link-btn.danger { color: var(--muted); }
   .link-btn.danger:hover { color: var(--danger); }
+  .export-btn {
+    display: inline-block;
+    margin-bottom: 12px;
+    font-size: 13px;
+    color: var(--accent);
+    text-decoration: none;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 5px 10px;
+  }
+  .export-btn:hover { border-color: var(--accent); }
+  .senses {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+  .sense {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .sense .pos {
+    font-size: 11px;
+    color: var(--accent);
+    background: var(--accent-soft);
+    padding: 1px 5px;
+    border-radius: 5px;
+    white-space: nowrap;
+  }
+  .sense .translation {
+    font-size: 13px;
+    color: var(--text);
+    word-break: break-word;
+  }
+  code.generated-password {
+    background: var(--accent-soft);
+    color: var(--accent);
+    padding: 2px 6px;
+    border-radius: 5px;
+    font-size: 13px;
+  }
 </style>
 </head>
 <body>
@@ -101,7 +146,7 @@
   </template>
   <template v-else>
     <div class="topbar">
-      <span>{{ me.username }}（超管）</span>
+      <span><a href="/profile.html">{{ me.username }}</a><span class="badge" style="margin-left:6px;">超管</span></span>
       <a href="/">返回背单词</a>
     </div>
     <h1>后台管理</h1>
@@ -132,6 +177,15 @@
       <p class="msg" :class="{ error: !!userMsgError, ok: !!userMsgOk }">{{ userMsgError || userMsgOk }}</p>
     </div>
 
+    <el-dialog v-model="resetResultVisible" title="密码已重置" width="380px" style="max-width: 92vw;">
+      <p>用户「{{ resetUsername }}」的新密码：</p>
+      <p><code class="generated-password">{{ generatedPassword }}</code>
+         <el-button size="small" @click="copyPassword">复制</el-button></p>
+      <template #footer>
+        <el-button @click="resetResultVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
+
     <h2>DeepSeek 查词配置</h2>
     <div class="card">
       <div class="checkbox-row">
@@ -150,13 +204,22 @@
 
     <h2>词库管理</h2>
     <div class="card">
+      <a class="export-btn" href="/api/admin/dictionary/export">导出 CSV</a>
       <input type="text" v-model="dictFilter" placeholder="按单词过滤" />
       <table style="margin-top: 12px;">
-        <thead><tr><th>单词</th><th>出现次数</th><th>最后更新时间</th><th>操作</th></tr></thead>
+        <thead><tr><th>单词</th><th>释义</th><th>最后更新时间</th><th>操作</th></tr></thead>
         <tbody>
           <tr v-for="d in filteredDictEntries" :key="d.word_key">
             <td>{{ d.display_word }}</td>
-            <td>{{ d.occurrence_count }}</td>
+            <td>
+              <div class="senses" v-if="d.senses && d.senses.length">
+                <div class="sense" v-for="(s, idx) in d.senses" :key="idx">
+                  <span class="pos" v-if="s.pos">{{ s.pos }}</span>
+                  <span class="translation">{{ s.translation }}</span>
+                </div>
+              </div>
+              <span v-else>暂无释义</span>
+            </td>
             <td>{{ formatTime(d.last_updated_at) }}</td>
             <td><button class="link-btn danger" @click="deleteDictEntry(d)">删除</button></td>
           </tr>
@@ -170,6 +233,7 @@
 <script type="module">
 import { formatTime, requireLogin } from "/common.js";
 const { createApp, ref, reactive, computed, onMounted } = Vue;
+const { ElMessage, ElMessageBox } = ElementPlus;
 
 createApp({
   setup() {
@@ -182,6 +246,9 @@ createApp({
     const creatingUser = ref(false);
     const userMsgError = ref("");
     const userMsgOk = ref("");
+    const generatedPassword = ref("");
+    const resetUsername = ref("");
+    const resetResultVisible = ref(false);
 
     const dsForm = reactive({ enabled: false, api_key: "", base_url: "", model: "" });
     const savingSettings = ref(false);
@@ -235,39 +302,54 @@ createApp({
     }
 
     async function resetPassword(u) {
-      const pwd = prompt(`为用户「${u.username}」设置新密码（至少 6 位）：`);
-      if (pwd === null) return;
-      userMsgError.value = "";
-      userMsgOk.value = "";
-      if (pwd.length < 6) {
-        userMsgError.value = "密码长度至少 6 位";
+      try {
+        await ElMessageBox.confirm(`确定重置用户「${u.username}」的密码吗？`, "提示", {
+          confirmButtonText: "重置",
+          cancelButtonText: "取消",
+          type: "warning",
+        });
+      } catch (e) {
         return;
       }
       try {
-        const res = await fetch(`/api/admin/users/${u.id}/reset-password`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ password: pwd }),
-        });
+        const res = await fetch(`/api/admin/users/${u.id}/reset-password`, { method: "POST" });
+        const data = await res.json().catch(() => ({}));
         if (!res.ok) {
-          const data = await res.json().catch(() => ({}));
-          userMsgError.value = data.error || "重置失败";
+          ElMessage.error(data.error || "重置失败");
           return;
         }
-        userMsgOk.value = `已重置用户 ${u.username} 的密码`;
+        resetUsername.value = u.username;
+        generatedPassword.value = data.password;
+        resetResultVisible.value = true;
       } catch (e) {
-        userMsgError.value = "网络错误，请重试";
+        ElMessage.error("网络错误，请重试");
+      }
+    }
+
+    async function copyPassword() {
+      try {
+        await navigator.clipboard.writeText(generatedPassword.value);
+      } catch (e) {
+        // 剪贴板 API 不可用时忽略，管理员仍可从页面上手动选中复制
       }
     }
 
     async function deleteDictEntry(d) {
-      if (!confirm(`确定从词库删除「${d.display_word}」的缓存记录吗？`)) return;
+      try {
+        await ElMessageBox.confirm(`确定从词库删除「${d.display_word}」的缓存记录吗？`, "提示", {
+          confirmButtonText: "删除",
+          cancelButtonText: "取消",
+          type: "warning",
+        });
+      } catch (e) {
+        return;
+      }
       try {
         const res = await fetch(`/api/admin/dictionary/${encodeURIComponent(d.word_key)}`, { method: "DELETE" });
         if (!res.ok) throw new Error();
         dictEntries.value = dictEntries.value.filter((x) => x.word_key !== d.word_key);
       } catch (e) {
-        alert("删除失败，请重试");
+        ElMessage.error("删除失败，请重试");
       }
     }
 
@@ -331,13 +413,15 @@ createApp({
 
     return {
       loading, isAdmin, me,
-      users, newUser, creatingUser, userMsgError, userMsgOk, createUser, resetPassword,
+      users, newUser, creatingUser, userMsgError, userMsgOk, generatedPassword, resetUsername, resetResultVisible, createUser, resetPassword, copyPassword,
       dsForm, savingSettings, settingsMsgError, settingsMsgOk, saveSettings,
       dictEntries, dictFilter, filteredDictEntries, deleteDictEntry,
       formatTime,
     };
   },
-}).mount("#app");
+})
+  .use(ElementPlus, { locale: window.ElementPlusLocaleZhCn })
+  .mount("#app");
 </script>
 </body>
 </html>

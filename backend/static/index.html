@@ -5,6 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>背单词</title>
 <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+<link rel="stylesheet" href="https://unpkg.com/element-plus/dist/index.css" />
+<script src="https://unpkg.com/element-plus/dist/index.full.js"></script>
+<script src="https://unpkg.com/element-plus/dist/locale/zh-cn.js"></script>
 <link rel="stylesheet" href="/common.css" />
 <style>
   .login-box {
@@ -221,7 +224,6 @@
     font-size: 14px;
     padding: 60px 0;
   }
-
   @media (max-width: 480px) {
     .word-card {
       flex-direction: column;
@@ -264,7 +266,7 @@
 
   <template v-else>
     <div class="topbar">
-      <span>{{ currentUser.username }}</span>
+      <a href="/profile.html">{{ currentUser.username }}</a>
       <span>
         <a href="/archive.html">归档</a>
         <a href="/stats.html">统计</a>
@@ -272,6 +274,7 @@
         <button @click="logout">退出登录</button>
       </span>
     </div>
+
     <h1>背单词</h1>
     <div class="input-wrap">
       <input
@@ -330,6 +333,7 @@
 <script type="module">
 import { formatTime } from "/common.js";
 const { createApp, ref, reactive, computed, onMounted, nextTick } = Vue;
+const { ElMessage, ElMessageBox } = ElementPlus;
 
 createApp({
   setup() {
@@ -494,7 +498,15 @@ createApp({
     }
 
     async function deleteWord(w) {
-      if (!confirm(`确定删除「${w.display_word}」吗？`)) return;
+      try {
+        await ElMessageBox.confirm(`确定删除「${w.display_word}」吗？`, "提示", {
+          confirmButtonText: "删除",
+          cancelButtonText: "取消",
+          type: "warning",
+        });
+      } catch (e) {
+        return;
+      }
       try {
         const res = await fetch(`/api/words/${w.id}`, { method: "DELETE" });
         if (!res.ok) throw new Error();
@@ -539,7 +551,9 @@ createApp({
       formatTime,
     };
   },
-}).mount("#app");
+})
+  .use(ElementPlus, { locale: window.ElementPlusLocaleZhCn })
+  .mount("#app");
 </script>
 </body>
 </html>

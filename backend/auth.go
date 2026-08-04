@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"log"
+	"math/big"
 	"net/http"
 	"os"
 	"strconv"
@@ -73,27 +74,31 @@ func createUser(username, password string, isAdmin bool) (User, error) {
 	return User{ID: int(id), Username: username, IsAdmin: isAdmin, CreatedAt: now}, nil
 }
 
-type resetPasswordRequest struct {
-	Password string `json:"password"`
+// passwordCharset 生成随机密码用的字符集，避开容易混淆的字符（0/O、1/l/I）
+const passwordCharset = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
+
+func generateRandomPassword(length int) string {
+	b := make([]byte, length)
+	for i := range b {
+		n, err := rand.Int(rand.Reader, big.NewInt(int64(len(passwordCharset))))
+		if err != nil {
+			log.Fatalf("生成随机密码失败: %v", err)
+		}
+		b[i] = passwordCharset[n.Int64()]
+	}
+	return string(b)
 }
 
-// handleResetUserPassword 管理员重置指定用户的密码；重置后该用户所有已登录会话立即失效，需要重新登录
+// handleResetUserPassword 管理员重置指定用户的密码：后端自动生成随机密码并返回明文供管理员复制，
+// 重置后该用户所有已登录会话立即失效，需要用新密码重新登录
 func handleResetUserPassword(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.Atoi(r.PathValue("id"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "无效的 id")
 		return
 	}
-	var req resetPasswordRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "请求格式不正确")
-		return
-	}
-	if len(req.Password) < 6 {
-		writeError(w, http.StatusBadRequest, "密码长度至少 6 位")
-		return
-	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	newPassword := generateRandomPassword(10)
+	hash, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
 	if err != nil {
 		log.Printf("生成密码哈希失败: %v", err)
 		writeError(w, http.StatusInternalServerError, "重置失败")
@@ -105,6 +110,47 @@ func handleResetUserPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	db.Exec(`DELETE FROM sessions WHERE user_id = ?`, id)
+	writeJSON(w, http.StatusOK, map[string]string{"password": newPassword})
+}
+
+type changePasswordRequest struct {
+	OldPassword string `json:"old_password"`
+	NewPassword string `json:"new_password"`
+}
+
+// handleChangePassword 登录用户自助修改自己的密码，需要正确提供旧密码；当前会话仍然有效
+func handleChangePassword(w http.ResponseWriter, r *http.Request) {
+	user := currentUser(r)
+	var req changePasswordRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "请求格式不正确")
+		return
+	}
+	if len(req.NewPassword) < 6 {
+		writeError(w, http.StatusBadRequest, "新密码长度至少 6 位")
+		return
+	}
+	var hash string
+	if err := db.QueryRow(`SELECT password_hash FROM users WHERE id = ?`, user.ID).Scan(&hash); err != nil {
+		log.Printf("查询密码失败: %v", err)
+		writeError(w, http.StatusInternalServerError, "修改失败")
+		return
+	}
+	if bcrypt.CompareHashAndPassword([]byte(hash), []byte(req.OldPassword)) != nil {
+		writeError(w, http.StatusBadRequest, "原密码错误")
+		return
+	}
+	newHash, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
+	if err != nil {
+		log.Printf("生成密码哈希失败: %v", err)
+		writeError(w, http.StatusInternalServerError, "修改失败")
+		return
+	}
+	if _, err := db.Exec(`UPDATE users SET password_hash = ? WHERE id = ?`, string(newHash), user.ID); err != nil {
+		log.Printf("更新密码失败: %v", err)
+		writeError(w, http.StatusInternalServerError, "修改失败")
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 

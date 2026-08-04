@@ -1,9 +1,11 @@
 package main
 
 import (
+	"encoding/csv"
 	"encoding/json"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -56,32 +58,81 @@ func saveDictionarySenses(wordKey string, senses []Sense) {
 }
 
 type dictionaryEntry struct {
-	WordKey         string    `json:"word_key"`
-	DisplayWord     string    `json:"display_word"`
-	OccurrenceCount int       `json:"occurrence_count"`
-	LastUpdatedAt   time.Time `json:"last_updated_at"`
+	WordKey       string    `json:"word_key"`
+	DisplayWord   string    `json:"display_word"`
+	Senses        []Sense   `json:"senses"`
+	LastUpdatedAt time.Time `json:"last_updated_at"`
 }
 
-// handleListDictionary 管理员查看全局词库：单词、出现次数、最后更新时间，按出现次数降序
-func handleListDictionary(w http.ResponseWriter, r *http.Request) {
-	rows, err := db.Query(`SELECT word_key, display_word, occurrence_count, last_updated_at FROM word_dictionary ORDER BY occurrence_count DESC`)
+// formatSenses 把释义拼成一段可读文本，如 "n. 名词；v. 动词"，用于导出等纯文本场景
+func formatSenses(senses []Sense) string {
+	parts := make([]string, 0, len(senses))
+	for _, s := range senses {
+		if s.Pos != "" {
+			parts = append(parts, s.Pos+" "+s.Translation)
+		} else {
+			parts = append(parts, s.Translation)
+		}
+	}
+	return strings.Join(parts, "；")
+}
+
+// queryDictionaryEntries 查询全局词库，按最后更新时间降序
+func queryDictionaryEntries() ([]dictionaryEntry, error) {
+	rows, err := db.Query(`SELECT word_key, display_word, senses, last_updated_at FROM word_dictionary ORDER BY last_updated_at DESC`)
 	if err != nil {
-		log.Printf("查询词库失败: %v", err)
-		writeError(w, http.StatusInternalServerError, "查询失败")
-		return
+		return nil, err
 	}
 	defer rows.Close()
 
 	entries := []dictionaryEntry{}
 	for rows.Next() {
 		var e dictionaryEntry
-		if err := rows.Scan(&e.WordKey, &e.DisplayWord, &e.OccurrenceCount, &e.LastUpdatedAt); err != nil {
+		var sensesRaw []byte
+		if err := rows.Scan(&e.WordKey, &e.DisplayWord, &sensesRaw, &e.LastUpdatedAt); err != nil {
 			log.Printf("读取词库记录失败: %v", err)
 			continue
 		}
+		if len(sensesRaw) > 0 {
+			if err := json.Unmarshal(sensesRaw, &e.Senses); err != nil {
+				log.Printf("解析词库释义失败 word=%s: %v", e.WordKey, err)
+			}
+		}
 		entries = append(entries, e)
 	}
+	return entries, nil
+}
+
+// handleListDictionary 管理员查看全局词库：单词、释义、最后更新时间
+func handleListDictionary(w http.ResponseWriter, r *http.Request) {
+	entries, err := queryDictionaryEntries()
+	if err != nil {
+		log.Printf("查询词库失败: %v", err)
+		writeError(w, http.StatusInternalServerError, "查询失败")
+		return
+	}
 	writeJSON(w, http.StatusOK, entries)
+}
+
+// handleExportDictionary 管理员导出全局词库为 CSV，带 UTF-8 BOM 保证 Excel 打开中文不乱码
+func handleExportDictionary(w http.ResponseWriter, r *http.Request) {
+	entries, err := queryDictionaryEntries()
+	if err != nil {
+		log.Printf("导出词库失败: %v", err)
+		writeError(w, http.StatusInternalServerError, "导出失败")
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+	w.Header().Set("Content-Disposition", "attachment; filename=dictionary.csv")
+	w.Write([]byte("\xEF\xBB\xBF"))
+
+	writer := csv.NewWriter(w)
+	writer.Write([]string{"单词", "释义", "最后更新时间"})
+	for _, e := range entries {
+		writer.Write([]string{e.DisplayWord, formatSenses(e.Senses), e.LastUpdatedAt.Format("2006-01-02 15:04:05")})
+	}
+	writer.Flush()
 }
 
 // handleDeleteDictionaryEntry 管理员删除全局词库里的一条缓存记录；只影响词库缓存本身，

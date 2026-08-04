@@ -29,6 +29,7 @@ func main() {
 	mux.HandleFunc("POST /api/login", handleLogin)
 	mux.HandleFunc("POST /api/logout", handleLogout)
 	mux.HandleFunc("GET /api/me", requireAuth(handleMe))
+	mux.HandleFunc("PUT /api/me/password", requireAuth(handleChangePassword))
 
 	mux.HandleFunc("POST /api/words", requireAuth(handleAddWord))
 	mux.HandleFunc("GET /api/words", requireAuth(handleListWords))
@@ -42,6 +43,7 @@ func main() {
 	mux.HandleFunc("GET /api/admin/settings", requireAdmin(handleGetSettings))
 	mux.HandleFunc("PUT /api/admin/settings", requireAdmin(handleUpdateSettings))
 	mux.HandleFunc("GET /api/admin/dictionary", requireAdmin(handleListDictionary))
+	mux.HandleFunc("GET /api/admin/dictionary/export", requireAdmin(handleExportDictionary))
 	mux.HandleFunc("DELETE /api/admin/dictionary/{word_key}", requireAdmin(handleDeleteDictionaryEntry))
 
 	mux.Handle("/", http.FileServer(http.Dir("./static")))

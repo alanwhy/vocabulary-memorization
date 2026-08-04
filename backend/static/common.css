@@ -8,6 +8,7 @@
   --accent: #2f6f4f;
   --accent-soft: #eaf4ee;
   --danger: #c65b5b;
+  --el-color-primary: var(--accent);
 }
 @media (prefers-color-scheme: dark) {
   :root {

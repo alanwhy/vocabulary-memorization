@@ -5,6 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>归档 · 背单词</title>
 <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+<link rel="stylesheet" href="https://unpkg.com/element-plus/dist/index.css" />
+<script src="https://unpkg.com/element-plus/dist/index.full.js"></script>
+<script src="https://unpkg.com/element-plus/dist/locale/zh-cn.js"></script>
 <link rel="stylesheet" href="/common.css" />
 <style>
   ul.word-list {
@@ -115,7 +118,7 @@
 
   <template v-else>
     <div class="topbar">
-      <span>{{ currentUser ? currentUser.username : "" }}</span>
+      <a href="/profile.html">{{ currentUser ? currentUser.username : "" }}</a>
       <span>
         <a href="/">返回背单词</a>
       </span>
@@ -151,6 +154,7 @@
 <script type="module">
 import { formatTime, requireLogin } from "/common.js";
 const { createApp, ref, onMounted } = Vue;
+const { ElMessage, ElMessageBox } = ElementPlus;
 
 createApp({
   setup() {
@@ -184,13 +188,21 @@ createApp({
     }
 
     async function deleteWord(w) {
-      if (!confirm(`确定删除「${w.display_word}」吗？`)) return;
+      try {
+        await ElMessageBox.confirm(`确定删除「${w.display_word}」吗？`, "提示", {
+          confirmButtonText: "删除",
+          cancelButtonText: "取消",
+          type: "warning",
+        });
+      } catch (e) {
+        return;
+      }
       try {
         const res = await fetch(`/api/words/${w.id}`, { method: "DELETE" });
         if (!res.ok) throw new Error();
         words.value = words.value.filter((x) => x.id !== w.id);
       } catch (e) {
-        // 忽略，用户可以再点一次
+        ElMessage.error("删除失败，请重试");
       }
     }
 
@@ -205,7 +217,9 @@ createApp({
       deleteWord,
     };
   },
-}).mount("#app");
+})
+  .use(ElementPlus, { locale: window.ElementPlusLocaleZhCn })
+  .mount("#app");
 </script>
 </body>
 </html>
