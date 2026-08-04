@@ -2,6 +2,11 @@
 
 本项目的版本变更记录，格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [1.5.1] - 2026-08-04
+
+### Changed
+- 前端主题色由绿色改为 Element Plus 默认主色（`#409eff`），浅色/深色模式的辅助底色同步对齐 Element Plus 官方取值，不再和组件库内部默认的蓝色浅底不一致
+
 ## [1.5.0] - 2026-08-04
 
 ### Changed
