@@ -44,7 +44,7 @@ func lookupDeepSeek(word string) ([]Sense, error) {
 	prompt := fmt.Sprintf(`你是一个英汉词典。给出英文单词 "%s" 的所有常见词性及对应的简洁中文释义。
 严格只返回一个 JSON 数组，不要包含任何解释文字或 markdown 代码块标记。
 数组每个元素形如 {"pos":"词性缩写，如 n./v./adj./adv.","translation":"简洁中文释义"}。
-如果这个词有多个常见词性，就返回多条，每个词性单独一条，不要合并到一起。`, word)
+每个词性只返回一条：同一词性如果有多个常见释义，合并成一条，用中文分号"；"分隔；不同词性分别返回不同的一条，不要合并到一起。`, word)
 
 	reqBody := deepseekChatRequest{
 		Model:       cfg.Model,

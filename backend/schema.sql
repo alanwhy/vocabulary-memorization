@@ -23,6 +23,15 @@ CREATE TABLE IF NOT EXISTS settings (
   value TEXT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+CREATE TABLE IF NOT EXISTS word_dictionary (
+  word_key VARCHAR(255) NOT NULL PRIMARY KEY,
+  display_word VARCHAR(255) NOT NULL,
+  senses JSON,
+  occurrence_count INT NOT NULL DEFAULT 1,
+  first_seen_at DATETIME NOT NULL,
+  last_updated_at DATETIME NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 CREATE TABLE IF NOT EXISTS words (
   id INT AUTO_INCREMENT PRIMARY KEY,
   user_id INT NOT NULL,

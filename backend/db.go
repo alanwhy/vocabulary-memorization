@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -70,10 +71,21 @@ func migrateSchema() {
 		value TEXT
 	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
 
+	mustExec(`CREATE TABLE IF NOT EXISTS word_dictionary (
+		word_key VARCHAR(255) NOT NULL PRIMARY KEY,
+		display_word VARCHAR(255) NOT NULL,
+		senses JSON,
+		occurrence_count INT NOT NULL DEFAULT 1,
+		first_seen_at DATETIME NOT NULL,
+		last_updated_at DATETIME NOT NULL
+	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+
 	migrateWordsSenses()
 	migrateWordsUserIDColumn()
 	migrateWordsTranslatingColumn()
 	migrateWordsArchivedColumn()
+	mergeHistoricalWordSenses()
+	backfillWordDictionary()
 }
 
 // migrateWordsSenses 给 words 表补 senses 列，并把老的 pos/translation 单值列打包迁移过去
@@ -111,6 +123,105 @@ func migrateWordsArchivedColumn() {
 		return
 	}
 	mustExec(`ALTER TABLE words ADD COLUMN archived TINYINT(1) NOT NULL DEFAULT 0`)
+}
+
+// mergeHistoricalWordSenses 一次性把 words 表里历史遗留的、同词性被拆成多行的释义合并成一行；
+// mergeSensesByPos 是幂等的，重复合并已经合并过的数据不会再变化，可以放心每次启动都跑一遍全表扫描
+func mergeHistoricalWordSenses() {
+	rows, err := db.Query(`SELECT id, senses FROM words WHERE senses IS NOT NULL AND JSON_LENGTH(senses) > 0`)
+	if err != nil {
+		log.Fatalf("扫描历史释义失败: %v", err)
+	}
+	type pendingUpdate struct {
+		id     int
+		senses []byte
+	}
+	var updates []pendingUpdate
+	for rows.Next() {
+		var id int
+		var raw []byte
+		if err := rows.Scan(&id, &raw); err != nil {
+			log.Fatalf("读取历史释义失败: %v", err)
+		}
+		var senses []Sense
+		if err := json.Unmarshal(raw, &senses); err != nil {
+			continue
+		}
+		merged := mergeSensesByPos(senses)
+		if len(merged) == len(senses) {
+			continue
+		}
+		mergedJSON, err := json.Marshal(merged)
+		if err != nil {
+			continue
+		}
+		updates = append(updates, pendingUpdate{id: id, senses: mergedJSON})
+	}
+	rows.Close()
+
+	for _, u := range updates {
+		if _, err := db.Exec(`UPDATE words SET senses = ? WHERE id = ?`, u.senses, u.id); err != nil {
+			log.Printf("写回合并后的释义失败 id=%d: %v", u.id, err)
+		}
+	}
+}
+
+// backfillWordDictionary 老部署升级后的一次性回填：按 word_key 聚合现有 words 表数据，
+// INSERT IGNORE 进 word_dictionary，已存在的 key 不会被覆盖，所以每次启动重跑也没有副作用
+func backfillWordDictionary() {
+	rows, err := db.Query(`SELECT word_key, display_word, senses, review_count, first_added_at, last_reviewed_at FROM words ORDER BY id`)
+	if err != nil {
+		log.Fatalf("扫描历史单词失败: %v", err)
+	}
+	type dictAgg struct {
+		displayWord   string
+		senses        []Sense
+		occurrence    int
+		firstSeenAt   time.Time
+		lastUpdatedAt time.Time
+	}
+	aggs := make(map[string]*dictAgg)
+	for rows.Next() {
+		var wordKey, displayWord string
+		var sensesRaw []byte
+		var reviewCount int
+		var firstAddedAt, lastReviewedAt time.Time
+		if err := rows.Scan(&wordKey, &displayWord, &sensesRaw, &reviewCount, &firstAddedAt, &lastReviewedAt); err != nil {
+			log.Fatalf("读取历史单词失败: %v", err)
+		}
+		a, ok := aggs[wordKey]
+		if !ok {
+			a = &dictAgg{displayWord: displayWord, firstSeenAt: firstAddedAt, lastUpdatedAt: lastReviewedAt}
+			aggs[wordKey] = a
+		}
+		a.occurrence += reviewCount
+		if firstAddedAt.Before(a.firstSeenAt) {
+			a.firstSeenAt = firstAddedAt
+		}
+		if lastReviewedAt.After(a.lastUpdatedAt) {
+			a.lastUpdatedAt = lastReviewedAt
+		}
+		if len(a.senses) == 0 && len(sensesRaw) > 0 {
+			var senses []Sense
+			if err := json.Unmarshal(sensesRaw, &senses); err == nil && len(senses) > 0 {
+				a.senses = mergeSensesByPos(senses)
+			}
+		}
+	}
+	rows.Close()
+
+	for wordKey, a := range aggs {
+		sensesJSON, err := json.Marshal(a.senses)
+		if err != nil {
+			sensesJSON = []byte("[]")
+		}
+		if _, err := db.Exec(
+			`INSERT IGNORE INTO word_dictionary (word_key, display_word, senses, occurrence_count, first_seen_at, last_updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
+			wordKey, a.displayWord, sensesJSON, a.occurrence, a.firstSeenAt, a.lastUpdatedAt,
+		); err != nil {
+			log.Printf("回填词库失败 word=%s: %v", wordKey, err)
+		}
+	}
 }
 
 // finalizeWordsUserID 在超管账号创建完成后调用：把迁移阶段遗留的、还没有归属的历史单词

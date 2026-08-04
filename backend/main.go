@@ -40,6 +40,7 @@ func main() {
 	mux.HandleFunc("GET /api/admin/users", requireAdmin(handleListUsers))
 	mux.HandleFunc("GET /api/admin/settings", requireAdmin(handleGetSettings))
 	mux.HandleFunc("PUT /api/admin/settings", requireAdmin(handleUpdateSettings))
+	mux.HandleFunc("GET /api/admin/dictionary", requireAdmin(handleListDictionary))
 
 	mux.Handle("/", http.FileServer(http.Dir("./static")))
 
@@ -79,10 +80,23 @@ func handleAddWord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 不存在：先原样插入，标记为查词中，立即返回；释义交给后台异步查询后再写回
+	// 不管是不是这个用户第一次输入，先登记一次全局词库的出现次数
+	upsertDictionaryOccurrence(wordKey, raw, now)
+
+	// 全局词库如果已经缓存过这个词的释义，直接复用，不用再问一次大模型
+	cachedSenses, cacheHit := lookupDictionarySenses(wordKey)
+	initialSenses := []Sense{}
+	if cacheHit {
+		initialSenses = cachedSenses
+	}
+	sensesJSON, err := json.Marshal(initialSenses)
+	if err != nil {
+		sensesJSON = []byte("[]")
+	}
+
 	res, err := db.Exec(
-		`INSERT INTO words (user_id, word_key, display_word, senses, translating, review_count, first_added_at, last_reviewed_at) VALUES (?, ?, ?, ?, 1, 1, ?, ?)`,
-		user.ID, wordKey, raw, []byte("[]"), now, now,
+		`INSERT INTO words (user_id, word_key, display_word, senses, translating, review_count, first_added_at, last_reviewed_at) VALUES (?, ?, ?, ?, ?, 1, ?, ?)`,
+		user.ID, wordKey, raw, sensesJSON, !cacheHit, now, now,
 	)
 	if err != nil {
 		// 并发下可能有另一个请求刚好抢先插入了同一个单词，退化为累加次数
@@ -98,14 +112,16 @@ func handleAddWord(w http.ResponseWriter, r *http.Request) {
 	id, _ := res.LastInsertId()
 	wordID := int(id)
 
-	go translateAndSave(wordID, wordKey)
+	if !cacheHit {
+		go translateAndSave(wordID, wordKey)
+	}
 
 	newWord := Word{
 		ID:             wordID,
 		WordKey:        wordKey,
 		DisplayWord:    raw,
-		Senses:         []Sense{},
-		Translating:    true,
+		Senses:         initialSenses,
+		Translating:    !cacheHit,
 		ReviewCount:    1,
 		FirstAddedAt:   now,
 		LastReviewedAt: now,
@@ -113,10 +129,33 @@ func handleAddWord(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, newWord)
 }
 
-// translateAndSave 在后台异步查词，查完再把释义写回数据库，不阻塞单词的录入请求
+// translateRetryDelays 查词失败时的重试间隔（指数退避），用完仍失败才彻底放弃
+var translateRetryDelays = []time.Duration{2 * time.Second, 4 * time.Second, 8 * time.Second, 16 * time.Second, 30 * time.Second}
+
+// translateAndSave 在后台异步查词，查完再把释义写回数据库和全局词库缓存，不阻塞单词的录入请求；
+// 查词失败会按退避间隔重试，避免偶发失败导致释义永久空白
 func translateAndSave(wordID int, wordKey string) {
-	result := translateWord(wordKey)
-	sensesJSON, err := json.Marshal(result.Senses)
+	for attempt := 0; ; attempt++ {
+		result := translateWord(wordKey)
+		merged := mergeSensesByPos(result.Senses)
+		if len(merged) > 0 {
+			saveWordSenses(wordID, wordKey, merged)
+			saveDictionarySenses(wordKey, merged)
+			return
+		}
+		if attempt >= len(translateRetryDelays) {
+			log.Printf("查词多次重试后仍失败，放弃 word=%s", wordKey)
+			saveWordSenses(wordID, wordKey, []Sense{})
+			return
+		}
+		delay := translateRetryDelays[attempt]
+		log.Printf("查词失败，%s 后重试 word=%s attempt=%d", delay, wordKey, attempt+1)
+		time.Sleep(delay)
+	}
+}
+
+func saveWordSenses(wordID int, wordKey string, senses []Sense) {
+	sensesJSON, err := json.Marshal(senses)
 	if err != nil {
 		log.Printf("序列化释义失败 word=%s: %v", wordKey, err)
 		sensesJSON = []byte("[]")
@@ -156,6 +195,7 @@ func tryIncrementExisting(w http.ResponseWriter, userID int, wordKey string, now
 		writeError(w, http.StatusInternalServerError, "更新失败")
 		return true
 	}
+	upsertDictionaryOccurrence(existing.WordKey, existing.DisplayWord, now)
 	existing.ReviewCount = newCount
 	existing.LastReviewedAt = now
 	writeJSON(w, http.StatusOK, existing)

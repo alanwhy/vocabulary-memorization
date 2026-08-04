@@ -136,12 +136,28 @@
       <button class="primary" :disabled="savingSettings" @click="saveSettings">保存配置</button>
       <p class="msg" :class="{ error: !!settingsMsgError, ok: !!settingsMsgOk }">{{ settingsMsgError || settingsMsgOk }}</p>
     </div>
+
+    <h2>词库管理</h2>
+    <div class="card">
+      <input type="text" v-model="dictFilter" placeholder="按单词过滤" />
+      <table style="margin-top: 12px;">
+        <thead><tr><th>单词</th><th>出现次数</th><th>最后更新时间</th></tr></thead>
+        <tbody>
+          <tr v-for="d in filteredDictEntries" :key="d.word_key">
+            <td>{{ d.display_word }}</td>
+            <td>{{ d.occurrence_count }}</td>
+            <td>{{ formatTime(d.last_updated_at) }}</td>
+          </tr>
+        </tbody>
+      </table>
+      <p class="msg" v-if="!dictEntries.length">词库暂无数据</p>
+    </div>
   </template>
 </div>
 
 <script type="module">
 import { formatTime, requireLogin } from "/common.js";
-const { createApp, ref, reactive, onMounted } = Vue;
+const { createApp, ref, reactive, computed, onMounted } = Vue;
 
 createApp({
   setup() {
@@ -160,6 +176,14 @@ createApp({
     const settingsMsgError = ref("");
     const settingsMsgOk = ref("");
 
+    const dictEntries = ref([]);
+    const dictFilter = ref("");
+    const filteredDictEntries = computed(() => {
+      const kw = dictFilter.value.trim().toLowerCase();
+      if (!kw) return dictEntries.value;
+      return dictEntries.value.filter((d) => d.word_key.includes(kw));
+    });
+
     async function init() {
       try {
         const user = await requireLogin();
@@ -171,7 +195,7 @@ createApp({
           return;
         }
         isAdmin.value = true;
-        await Promise.all([loadUsers(), loadSettings()]);
+        await Promise.all([loadUsers(), loadSettings(), loadDictionary()]);
       } finally {
         loading.value = false;
       }
@@ -191,6 +215,11 @@ createApp({
         dsForm.base_url = data.base_url;
         dsForm.model = data.model;
       }
+    }
+
+    async function loadDictionary() {
+      const res = await fetch("/api/admin/dictionary");
+      if (res.ok) dictEntries.value = await res.json();
     }
 
     async function createUser() {
@@ -255,6 +284,7 @@ createApp({
       loading, isAdmin, me,
       users, newUser, creatingUser, userMsgError, userMsgOk, createUser,
       dsForm, savingSettings, settingsMsgError, settingsMsgOk, saveSettings,
+      dictEntries, dictFilter, filteredDictEntries,
       formatTime,
     };
   },
