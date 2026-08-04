@@ -5,8 +5,8 @@
   --border: #e5e5e5;
   --text: #1f2328;
   --muted: #8a8f98;
-  --accent: #2f6f4f;
-  --accent-soft: #eaf4ee;
+  --accent: #409eff;
+  --accent-soft: #ecf5ff;
   --danger: #c65b5b;
   --el-color-primary: var(--accent);
 }
@@ -17,8 +17,8 @@
     --border: #33363d;
     --text: #e6e6e6;
     --muted: #8a8f98;
-    --accent: #5fbf8c;
-    --accent-soft: #1f3329;
+    --accent: #409eff;
+    --accent-soft: #18222b;
     --danger: #e08080;
   }
 }
