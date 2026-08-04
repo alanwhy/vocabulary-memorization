@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -12,6 +14,19 @@ import (
 
 	mysqldriver "github.com/go-sql-driver/mysql"
 )
+
+const staticDir = "./static"
+
+// spaHandler 让 Vue Router 的 history 模式深链接（如直接访问 /profile 并刷新）不 404：
+// 静态资源存在就直接返回，否则一律回退到 index.html，交给前端路由接管。
+func spaHandler(w http.ResponseWriter, r *http.Request) {
+	path := filepath.Join(staticDir, filepath.Clean(r.URL.Path))
+	if info, err := os.Stat(path); err == nil && !info.IsDir() {
+		http.ServeFile(w, r, path)
+		return
+	}
+	http.ServeFile(w, r, filepath.Join(staticDir, "index.html"))
+}
 
 // wordPattern 简单校验：以英文字母开头，只允许字母、空格、连字符、单引号，长度不超过 64
 var wordPattern = regexp.MustCompile(`^[A-Za-z][A-Za-z'\- ]{0,63}$`)
@@ -46,7 +61,7 @@ func main() {
 	mux.HandleFunc("GET /api/admin/dictionary/export", requireAdmin(handleExportDictionary))
 	mux.HandleFunc("DELETE /api/admin/dictionary/{word_key}", requireAdmin(handleDeleteDictionaryEntry))
 
-	mux.Handle("/", http.FileServer(http.Dir("./static")))
+	mux.HandleFunc("/", spaHandler)
 
 	addr := ":8080"
 	log.Printf("服务启动，监听 %s", addr)

@@ -6,7 +6,7 @@
 
 - 应用整体需要登录才能使用，没有自助注册入口。
 - 首次启动会自动创建一个超管账号（用户名/密码见 `.env` 里的 `ADMIN_USERNAME` / `ADMIN_PASSWORD`，`./deploy.sh` 首次部署时会随机生成）。
-- 超管登录后可以在右上角「后台管理」（`/admin.html`）：
+- 超管登录后可以在右上角「后台管理」（`/admin`）：
   - 新增用户（可指定是否也是超管）
   - 重置任意用户的密码（重置后该用户所有已登录设备的会话立即失效，需要用新密码重新登录）
   - 修改 DeepSeek 查词配置
@@ -35,15 +35,18 @@ vocabulary-memorization/
 │   ├── deepseek.go              调用 DeepSeek 查词
 │   ├── translate.go             翻译逻辑：DeepSeek -> 在线接口兜底，失败重试由 main.go 调度
 │   ├── models.go                数据结构 + 同词性释义合并逻辑
-│   ├── static/index.html          背单词主页面（Vue 3，CDN 引入，无需构建）
-│   ├── static/archive.html        归档单词页面
-│   ├── static/stats.html          个人统计页面
-│   ├── static/admin.html          后台管理页面（用户管理 + DeepSeek 配置 + 词库管理）
-│   ├── static/common.css          四个页面共用的样式（主题变量、卡片、表格等）
-│   ├── static/common.js           四个页面共用的脚本（时间格式化、登录态校验等）
 │   ├── schema.sql                 数据库表结构
-│   └── Dockerfile
-├── docker-compose.yml          编排 MySQL + 后端两个容器
+│   ├── static/                    前端构建产物（`frontend/` 构建后生成，不进 git）
+│   └── Dockerfile                 多阶段构建：先构建 frontend/ 产物，再编译 Go 二进制
+├── frontend/                   Vue 3 + Vite 单页应用源码
+│   ├── vite.config.js            开发环境把 /api 代理到本地 Go 后端
+│   ├── src/api/client.js         统一 fetch 封装（凭证、401 跳转、错误归一化）
+│   ├── src/stores/auth.js        Pinia 鉴权 store
+│   ├── src/router/index.js       Vue Router（history 模式）+ 鉴权守卫
+│   ├── src/components/           AppTopbar、WordCard/WordList、Admin 子组件等共享组件
+│   ├── src/composables/          查词轮询、单词操作、统计计算等可复用逻辑
+│   └── src/views/                首页/归档/个人中心/统计/后台管理五个路由页面
+├── docker-compose.yml          编排 MySQL + 后端两个容器（构建上下文为仓库根目录）
 ├── deploy.sh                    一键部署/更新脚本（首次部署用）
 ├── DEPLOYMENT.md                 当前服务器的实际部署与更新流程（比这份 README 更详细、更贴近实操）
 ├── CHANGELOG.md                  版本变更记录
@@ -56,7 +59,7 @@ vocabulary-memorization/
 - 数据库：MySQL 8，数据存在 Docker volume 里，容器重启不丢数据。所有表结构变更（加表、加列）和历史数据修复都写成幂等迁移，随后端容器启动自动执行，不需要手工跑 SQL。
 - 认证：登录后用 HttpOnly Cookie 保存会话 token，会话有效期 30 天并会随访问自动续期；重置密码会让该用户所有旧会话立即失效。
 - 翻译：先查 DeepSeek（未配置或调用失败会跳过）→ 再调用 Google 免费翻译接口兜底；两个来源都失败会自动重试，仅在多次重试后仍失败才留空。同一单词全站只查一次，结果进全局词库缓存供所有用户复用。
-- 前端：`static/` 下四个 Vue 3 CDN 单文件页面（主页 / 归档 / 统计 / 后台管理），共用 `common.css` + `common.js`（原生 ES Module），没有打包步骤。
+- 前端：`frontend/` 下的 Vue 3 + Vite 单页应用，Vue Router（history 模式）+ Pinia，Element Plus 组件库。`npm run build` 产物打进 `backend/static/`，由 Go 后端统一提供静态资源和 SPA 深链接回退（`/profile`、`/admin` 等路径刷新不会 404）。
 
 ## 部署到服务器
 

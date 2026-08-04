@@ -51,15 +51,18 @@ curl -s http://101.42.45.60:39100/api/me   # 未登录应返回 401，不应该 
 
 万一迁移出问题，用第 1 步的备份文件在 mysql 容器里 `mysql -uroot -p"$MYSQL_ROOT_PASSWORD" < /tmp/backup_pre_<版本号>.sql` 即可整体还原。备份文件建议部署验证通过、稳定运行几天后再手动清理，不要部署完立刻删。
 
-## Go 模块代理：goproxy.cn
+## Go 模块代理：goproxy.cn / npm 镜像：npmmirror
 
-`backend/Dockerfile` 里加了一行：
+`backend/Dockerfile` 里加了两行，分别对应 Go 后端构建阶段和前端构建阶段：
 
 ```
 ENV GOPROXY=https://goproxy.cn,direct
+ENV NPM_CONFIG_REGISTRY=https://registry.npmmirror.com
 ```
 
-没有这行的话，`go mod tidy` 会去请求 `proxy.golang.org`，在这台服务器的网络环境下会直接超时，构建失败。
+没有这两行的话，`go mod tidy` 会去请求 `proxy.golang.org`，`npm ci` 会去请求 `registry.npmjs.org`，在这台服务器的网络环境下都会直接超时，构建失败。
+
+如果部署时发现 `npm ci` 仍然卡死/超时（镜像也不稳定的极端情况），退回备选方案：本机先 `cd frontend && npm run build`，再把 `frontend/dist/` 一起 rsync 到服务器，把 `backend/Dockerfile` 里的 `frontend-builder` stage 去掉，改成直接 `COPY frontend/dist ./static`。
 
 ## 端口：39100，不是默认的 8080
 
@@ -77,7 +80,7 @@ ENV GOPROXY=https://goproxy.cn,direct
 
 这意味着：**部署过一次之后，再改 `.env` 里的这几个值、重启容器，是不会生效的**——数据库里已经有记录了，代码只在"缺失"时才种入。
 
-正确的改法：登录后台管理页面 `http://101.42.45.60:39100/admin.html`（超管账号），在设置里改，改完立即生效，不需要重启容器。
+正确的改法：登录后台管理页面 `http://101.42.45.60:39100/admin`（超管账号），在设置里改，改完立即生效，不需要重启容器。
 
 ## 安全：不要把密钥写进代码
 

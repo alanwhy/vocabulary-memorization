@@ -2,6 +2,13 @@
 
 本项目的版本变更记录，格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [1.5.0] - 2026-08-04
+
+### Changed
+- 前端从 `backend/static/` 下 5 个各自独立、CDN 引入 Vue3 的静态页面，重写为 `frontend/` 目录下的 Vue 3 + Vite 单页应用：引入 Vue Router（history 模式，`/profile`、`/archive`、`/stats`、`/admin` 均为无 `.html` 后缀的干净路径）和 Pinia 集中管理鉴权状态，消除了原来 topbar、单词列表、鉴权样板、fetch 错误处理等大量跨页面重复代码
+- `backend/Dockerfile` 改为多阶段构建，新增 Node 构建阶段编译前端产物；`docker-compose.yml` 构建上下文调整为仓库根目录以让 Docker 构建看到 `frontend/`；`docker compose up -d --build` 仍是唯一部署命令，行为不变
+- `backend/main.go` 新增 SPA 深链接回退，直接访问 `/profile` 等路径并刷新不再 404
+
 ## [1.4.0] - 2026-08-04
 
 ### Added
