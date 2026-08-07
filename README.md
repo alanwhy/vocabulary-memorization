@@ -53,6 +53,7 @@ vocabulary-memorization/
 ├── docker-compose.yml          编排 MySQL + 后端两个容器（构建上下文为仓库根目录）
 ├── deploy.sh                    一键部署/更新脚本（首次部署用）
 ├── DEPLOYMENT.md                 当前服务器的实际部署与更新流程（比这份 README 更详细、更贴近实操）
+├── CONTRIBUTING.md               开发者指南：本地启动、测试、代码约定、发版流程
 ├── CHANGELOG.md                  版本变更记录
 └── README.md
 ```
@@ -67,6 +68,8 @@ vocabulary-memorization/
 - 分页：单词列表和后台词库表都是后端分页（`page`/`limit`，每页 100 条，上限 200），响应统一是 `{items, total, page, limit, has_more}` 信封。排序也在后端做，`sort` 参数走白名单映射成固定的 `ORDER BY` 片段（请求参数绝不拼进 SQL），且每种排序都以 `id` 收尾——否则按不唯一的列翻页会出现跨页重复或漏词。前端用 `IntersectionObserver` 哨兵触发下一页，而不是监听滚动事件。
 - 统计：统计页的数值由 `GET /api/stats` 用 SQL 聚合算出（总词汇量、累计背诵次数、次数分布、近 14 天新增），不再把全量单词下载到前端再算。
 - 主题：`html.dark` class 控制一整套 CSS 变量，class 由 `localStorage` 里的记录决定（默认浅色）。`index.html` 里有一小段内联脚本在样式生效前就把 class 加上，深色用户刷新时不会闪一帧白；Element Plus 的深色变量也挂在 `html.dark` 上，正好共用同一个开关。
+
+**想在本地把这套服务跑起来改代码**（含开发模式热更新、测试命令、代码约定、发版流程）→ [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ## 部署到服务器
 
