@@ -64,6 +64,8 @@ func main() {
 
 	mux.HandleFunc("POST /api/words", withTimeout(defaultRequestTimeout)(app.requireAuth(app.handleAddWord)))
 	mux.HandleFunc("GET /api/words", withTimeout(defaultRequestTimeout)(app.requireAuth(app.handleListWords)))
+	mux.HandleFunc("GET /api/words/translating", withTimeout(defaultRequestTimeout)(app.requireAuth(app.handleListTranslatingWords)))
+	mux.HandleFunc("GET /api/stats", withTimeout(defaultRequestTimeout)(app.requireAuth(app.handleWordStats)))
 	mux.HandleFunc("DELETE /api/words/{id}", withTimeout(defaultRequestTimeout)(app.requireAuth(app.handleDeleteWord)))
 	mux.HandleFunc("POST /api/words/{id}/archive", withTimeout(defaultRequestTimeout)(app.requireAuth(app.handleArchiveWord)))
 	mux.HandleFunc("POST /api/words/{id}/unarchive", withTimeout(defaultRequestTimeout)(app.requireAuth(app.handleUnarchiveWord)))
@@ -309,16 +311,111 @@ func (a *App) tryIncrementExisting(w http.ResponseWriter, r *http.Request, userI
 	return true
 }
 
+const (
+	defaultPageLimit = 100
+	maxPageLimit     = 200
+	statsTrendDays   = 14
+)
+
+// parsePagination 解析并夹取分页参数，非法或缺失时退回默认值，避免一次拉走整张表
+func parsePagination(r *http.Request) (page, limit, offset int) {
+	page = 1
+	if v, err := strconv.Atoi(r.URL.Query().Get("page")); err == nil && v > 1 {
+		page = v
+	}
+	limit = defaultPageLimit
+	if v, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && v > 0 {
+		limit = v
+		if limit > maxPageLimit {
+			limit = maxPageLimit
+		}
+	}
+	return page, limit, (page - 1) * limit
+}
+
+// parseIDList 解析逗号分隔的 id 列表，跳过非法项并去重，最多取 max 个：
+// 轮询的 ids 来自浏览器，不限长度的话一个超长列表会生成同样长的 IN 占位符
+func parseIDList(s string, max int) []int {
+	if s == "" {
+		return nil
+	}
+	seen := make(map[int]bool)
+	ids := []int{}
+	for _, part := range strings.Split(s, ",") {
+		v, err := strconv.Atoi(strings.TrimSpace(part))
+		if err != nil || v <= 0 || seen[v] {
+			continue
+		}
+		seen[v] = true
+		ids = append(ids, v)
+		if len(ids) >= max {
+			break
+		}
+	}
+	return ids
+}
+
 func (a *App) handleListWords(w http.ResponseWriter, r *http.Request) {
 	user := currentUser(r)
 	archived := r.URL.Query().Get("archived") == "1"
-	list, err := a.words.List(r.Context(), user.ID, archived)
+	sort := r.URL.Query().Get("sort")
+	page, limit, offset := parsePagination(r)
+
+	total, err := a.words.CountByUser(r.Context(), user.ID, archived)
+	if err != nil {
+		log.Printf("统计单词总数失败: %v", err)
+		writeError(w, http.StatusInternalServerError, "查询失败")
+		return
+	}
+	list, err := a.words.ListPage(r.Context(), user.ID, archived, sort, limit, offset)
 	if err != nil {
 		log.Printf("查询列表失败: %v", err)
 		writeError(w, http.StatusInternalServerError, "查询失败")
 		return
 	}
+	writeJSON(w, http.StatusOK, newPageResult(list, total, page, limit))
+}
+
+// handleListTranslatingWords 供前端轮询查词进度。
+// 带 ids 时返回这些 id 的当前状态（哪怕已经查完）——前端就是靠这次响应把释义补回列表；
+// 不带 ids 时返回该用户所有还在查词中的单词，用于刷新页面后重新接上轮询。
+func (a *App) handleListTranslatingWords(w http.ResponseWriter, r *http.Request) {
+	user := currentUser(r)
+	ids := parseIDList(r.URL.Query().Get("ids"), maxPageLimit)
+
+	var (
+		list []Word
+		err  error
+	)
+	if len(ids) > 0 {
+		list, err = a.words.FindByIDs(r.Context(), user.ID, ids)
+	} else {
+		list, err = a.words.FindTranslatingByUser(r.Context(), user.ID)
+	}
+	if err != nil {
+		log.Printf("查询查词中的单词失败: %v", err)
+		writeError(w, http.StatusInternalServerError, "查询失败")
+		return
+	}
 	writeJSON(w, http.StatusOK, list)
+}
+
+// handleWordStats 返回统计页需要的聚合数值。列表改成分页后前端拿不到全量数据，
+// 这些数字必须由后端用 SQL 聚合算出。
+func (a *App) handleWordStats(w http.ResponseWriter, r *http.Request) {
+	user := currentUser(r)
+	// 趋势图展示最近 statsTrendDays 天（含今天），起点取本地时区当天零点
+	now := time.Now()
+	midnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	since := midnight.AddDate(0, 0, -(statsTrendDays - 1))
+
+	stats, err := a.words.Stats(r.Context(), user.ID, since)
+	if err != nil {
+		log.Printf("查询统计数据失败: %v", err)
+		writeError(w, http.StatusInternalServerError, "查询失败")
+		return
+	}
+	writeJSON(w, http.StatusOK, stats)
 }
 
 func (a *App) handleDeleteWord(w http.ResponseWriter, r *http.Request) {

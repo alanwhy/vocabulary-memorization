@@ -1,5 +1,6 @@
+/* 主题不跟随系统偏好：浅色是默认值，深色由 html.dark 覆盖，class 由 useTheme.js 控制 */
 :root {
-  color-scheme: light dark;
+  color-scheme: light;
   --bg: #fafafa;
   --card-bg: #ffffff;
   --border: #e5e5e5;
@@ -9,18 +10,47 @@
   --accent-soft: #ecf5ff;
   --danger: #c65b5b;
   --el-color-primary: var(--accent);
+
+  /* 出现次数阶梯配色（档位见 utils/reviewLevel.js，边界 1/3/5/7/9/11）：
+     浅绿 → 黄绿 → 黄 → 橙 → 红 → 深红。前 4 档用浅底深字，后 2 档直接上实色配白字，
+     色相和明度一起推进，比单纯加深同一个颜色更容易区分 */
+  --count-1-bg: #e4f7e9;
+  --count-1-fg: #1f7a41;
+  --count-2-bg: #eaf6c3;
+  --count-2-fg: #5a7a0d;
+  --count-3-bg: #fbeeb5;
+  --count-3-fg: #866000;
+  --count-4-bg: #ffc180;
+  --count-4-fg: #7a3b00;
+  --count-5-bg: #ef5b50;
+  --count-5-fg: #ffffff;
+  --count-6-bg: #a11d1d;
+  --count-6-fg: #ffffff;
 }
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #16181c;
-    --card-bg: #1f2229;
-    --border: #33363d;
-    --text: #e6e6e6;
-    --muted: #8a8f98;
-    --accent: #409eff;
-    --accent-soft: #18222b;
-    --danger: #e08080;
-  }
+html.dark {
+  color-scheme: dark;
+  --bg: #16181c;
+  --card-bg: #1f2229;
+  --border: #33363d;
+  --text: #e6e6e6;
+  --muted: #8a8f98;
+  --accent: #409eff;
+  --accent-soft: #18222b;
+  --danger: #e08080;
+
+  /* 深色下保持同一串色相（绿→黄→橙→红），但底色压暗、前景提亮，避免浅底在暗背景上发白刺眼 */
+  --count-1-bg: #1b2c22;
+  --count-1-fg: #62c98a;
+  --count-2-bg: #26301a;
+  --count-2-fg: #adc95f;
+  --count-3-bg: #322b17;
+  --count-3-fg: #d9b652;
+  --count-4-bg: #3f2a12;
+  --count-4-fg: #f2a75c;
+  --count-5-bg: #b2352c;
+  --count-5-fg: #ffe9e6;
+  --count-6-bg: #7a1414;
+  --count-6-fg: #ffd9d6;
 }
 * { box-sizing: border-box; }
 html, body {
@@ -84,4 +114,27 @@ h2 {
   font-size: 11px;
   text-align: center;
   margin-top: 24px;
+}
+/* 出现次数徽标：全局样式而非 scoped，单词卡片和后台词库表共用同一套阶梯配色。
+   档位由 utils/reviewLevel.js 的 countLevel() 决定 */
+.count-badge {
+  font-size: 13px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+  background: var(--count-1-bg);
+  color: var(--count-1-fg);
+}
+.count-badge--l2 { background: var(--count-2-bg); color: var(--count-2-fg); }
+.count-badge--l3 { background: var(--count-3-bg); color: var(--count-3-fg); }
+.count-badge--l4 { background: var(--count-4-bg); color: var(--count-4-fg); }
+.count-badge--l5 { background: var(--count-5-bg); color: var(--count-5-fg); }
+.count-badge--l6 { background: var(--count-6-bg); color: var(--count-6-fg); }
+/* 列表底部的滚动加载状态 */
+.load-state {
+  text-align: center;
+  color: var(--muted);
+  font-size: 12px;
+  padding: 14px 0 4px;
 }

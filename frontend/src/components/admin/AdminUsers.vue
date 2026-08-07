@@ -2,6 +2,7 @@
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { apiGet, apiPost } from '@/api/client'
+import { formatTime } from '@/utils/format'
 
 const users = ref([])
 const newUser = reactive({ username: '', password: '', is_admin: false })
@@ -11,12 +12,6 @@ const userMsgOk = ref('')
 const generatedPassword = ref('')
 const resetUsername = ref('')
 const resetResultVisible = ref(false)
-
-function formatTime(iso) {
-  const d = new Date(iso)
-  const pad = (n) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
-}
 
 async function loadUsers() {
   users.value = await apiGet('/api/admin/users')
@@ -57,7 +52,8 @@ async function createUser() {
   creatingUser.value = true
   try {
     const data = await apiPost('/api/admin/users', newUser)
-    users.value.push(data)
+    // 创建接口返回的是 User，没有列表里的 word_count 字段，补个 0 免得这一列显示空白
+    users.value.push({ ...data, word_count: 0 })
     userMsgOk.value = `已创建用户 ${data.username}`
     newUser.username = ''
     newUser.password = ''
@@ -81,6 +77,8 @@ onMounted(loadUsers)
           <th>用户名</th>
           <th>角色</th>
           <th>创建时间</th>
+          <th>最后登录</th>
+          <th>录入单词数</th>
           <th>操作</th>
         </tr>
       </thead>
@@ -89,6 +87,8 @@ onMounted(loadUsers)
           <td>{{ u.username }}</td>
           <td><span class="badge" v-if="u.is_admin">超管</span><span v-else>普通用户</span></td>
           <td>{{ formatTime(u.created_at) }}</td>
+          <td>{{ formatTime(u.last_login_at, '从未登录') }}</td>
+          <td>{{ u.word_count }}</td>
           <td><button class="link-btn" @click="resetPassword(u)">重置密码</button></td>
         </tr>
       </tbody>

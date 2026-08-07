@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS users (
   password_hash VARCHAR(255) NOT NULL,
   is_admin TINYINT(1) NOT NULL DEFAULT 0,
   created_at DATETIME NOT NULL,
+  last_login_at DATETIME NULL,
   UNIQUE KEY uniq_username (username)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
@@ -44,5 +45,6 @@ CREATE TABLE IF NOT EXISTS words (
   first_added_at DATETIME NOT NULL,
   last_reviewed_at DATETIME NOT NULL,
   UNIQUE KEY uniq_user_word (user_id, word_key),
+  KEY idx_words_user_archived (user_id, archived),
   CONSTRAINT fk_words_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

@@ -54,10 +54,54 @@ type Word struct {
 	LastReviewedAt time.Time `json:"last_reviewed_at"`
 }
 
-// User 对应数据库 users 表的一条记录
+// User 对应数据库 users 表的一条记录；LastLoginAt 用指针表示“从未登录过”（数据库里为 NULL）
 type User struct {
-	ID        int       `json:"id"`
-	Username  string    `json:"username"`
-	IsAdmin   bool      `json:"is_admin"`
-	CreatedAt time.Time `json:"created_at"`
+	ID          int        `json:"id"`
+	Username    string     `json:"username"`
+	IsAdmin     bool       `json:"is_admin"`
+	CreatedAt   time.Time  `json:"created_at"`
+	LastLoginAt *time.Time `json:"last_login_at"`
+}
+
+// UserWithStats 管理员用户列表的一行：User 加上该用户录入的单词总数（含已归档）
+type UserWithStats struct {
+	User
+	WordCount int `json:"word_count"`
+}
+
+// pageResult 所有分页接口的统一响应信封；HasMore 由后端算好，前端不用自己拿 total 和 page 推
+type pageResult struct {
+	Items   interface{} `json:"items"`
+	Total   int         `json:"total"`
+	Page    int         `json:"page"`
+	Limit   int         `json:"limit"`
+	HasMore bool        `json:"has_more"`
+}
+
+func newPageResult(items interface{}, total, page, limit int) pageResult {
+	return pageResult{
+		Items:   items,
+		Total:   total,
+		Page:    page,
+		Limit:   limit,
+		HasMore: page*limit < total,
+	}
+}
+
+// dailyCount 某一天的新增单词数，Date 为本地时区的 YYYY-MM-DD
+type dailyCount struct {
+	Date  string `json:"date"`
+	Count int    `json:"count"`
+}
+
+// WordStats 统计页需要的全部聚合数值。列表分页后前端拿不到全量数据，这些改由后端用 SQL 聚合算出。
+// 除 TotalAllWords / ArchivedWords 外，其余字段都只统计未归档的单词，保持统计页原有口径。
+type WordStats struct {
+	TotalWords       int          `json:"total_words"`
+	ArchivedWords    int          `json:"archived_words"`
+	TotalAllWords    int          `json:"total_all_words"`
+	TotalReviews     int          `json:"total_reviews"`
+	TranslatingCount int          `json:"translating_count"`
+	ReviewBuckets    []int        `json:"review_buckets"`
+	DailyAdditions   []dailyCount `json:"daily_additions"`
 }

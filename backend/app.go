@@ -20,7 +20,8 @@ type userStore interface {
 	FindByUsername(ctx context.Context, username string) (User, string, error)
 	FindPasswordHash(ctx context.Context, id int) (string, error)
 	UpdatePasswordHash(ctx context.Context, id int, hash string) (int64, error)
-	List(ctx context.Context) ([]User, error)
+	RecordLogin(ctx context.Context, id int, now time.Time) error
+	List(ctx context.Context) ([]UserWithStats, error)
 	CountAdmins(ctx context.Context) (int, error)
 	FirstAdminID(ctx context.Context) (int, error)
 }
@@ -38,11 +39,15 @@ type wordStore interface {
 	Insert(ctx context.Context, userID int, wordKey, displayWord string, sensesJSON []byte, translating bool, now time.Time) (int, error)
 	FindByUserAndKey(ctx context.Context, userID int, wordKey string) (Word, []byte, error)
 	IncrementReview(ctx context.Context, id, newCount int, now time.Time) error
-	List(ctx context.Context, userID int, archived bool) ([]Word, error)
+	ListPage(ctx context.Context, userID int, archived bool, sort string, limit, offset int) ([]Word, error)
+	CountByUser(ctx context.Context, userID int, archived bool) (int, error)
 	Delete(ctx context.Context, id, userID int) (int64, error)
 	SetArchived(ctx context.Context, id, userID int, archived bool) (int64, error)
 	UpdateSenses(ctx context.Context, id int, sensesJSON []byte) error
 	FindTranslating(ctx context.Context) ([]Word, error)
+	FindTranslatingByUser(ctx context.Context, userID int) ([]Word, error)
+	FindByIDs(ctx context.Context, userID int, ids []int) ([]Word, error)
+	Stats(ctx context.Context, userID int, since time.Time) (WordStats, error)
 }
 
 type dictionaryStore interface {
@@ -50,6 +55,8 @@ type dictionaryStore interface {
 	LookupSenses(ctx context.Context, wordKey string) ([]byte, error)
 	SaveSenses(ctx context.Context, wordKey string, sensesJSON []byte) error
 	List(ctx context.Context) ([]dictionaryEntry, error)
+	ListPage(ctx context.Context, keyword string, limit, offset int) ([]dictionaryEntry, error)
+	Count(ctx context.Context, keyword string) (int, error)
 	Delete(ctx context.Context, wordKey string) error
 }
 

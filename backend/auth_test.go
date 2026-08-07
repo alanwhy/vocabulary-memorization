@@ -58,6 +58,49 @@ func TestHandleLoginSuccess(t *testing.T) {
 	}
 }
 
+func TestHandleLoginRecordsLastLogin(t *testing.T) {
+	app, users, sessions := newTestApp()
+	hash, _ := bcrypt.GenerateFromPassword([]byte("secret123"), bcrypt.DefaultCost)
+	u := users.addUser("alice", string(hash), false)
+	sessions.usersByID[u.ID] = u
+
+	req := httptest.NewRequest("POST", "/api/login", strings.NewReader(`{"username":"alice","password":"secret123"}`))
+	req.RemoteAddr = "1.2.3.4:5555"
+	rec := httptest.NewRecorder()
+
+	app.handleLogin(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if _, ok := users.logins[u.ID]; !ok {
+		t.Fatalf("expected last login time to be recorded for user %d, got %v", u.ID, users.logins)
+	}
+	// 响应体要立刻带上本次登录时间，前端不用再多请求一次 /api/me
+	if !strings.Contains(rec.Body.String(), `"last_login_at":"`) {
+		t.Fatalf("expected login response to carry last_login_at, got %s", rec.Body.String())
+	}
+}
+
+func TestHandleLoginFailureDoesNotRecordLastLogin(t *testing.T) {
+	app, users, _ := newTestApp()
+	hash, _ := bcrypt.GenerateFromPassword([]byte("secret123"), bcrypt.DefaultCost)
+	u := users.addUser("alice", string(hash), false)
+
+	req := httptest.NewRequest("POST", "/api/login", strings.NewReader(`{"username":"alice","password":"wrong"}`))
+	req.RemoteAddr = "1.2.3.4:5555"
+	rec := httptest.NewRecorder()
+
+	app.handleLogin(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", rec.Code)
+	}
+	if _, ok := users.logins[u.ID]; ok {
+		t.Fatalf("expected no last login record for a failed login")
+	}
+}
+
 func TestHandleLoginLockoutAfterThreshold(t *testing.T) {
 	app, users, _ := newTestApp()
 	hash, _ := bcrypt.GenerateFromPassword([]byte("secret123"), bcrypt.DefaultCost)

@@ -1,15 +1,12 @@
 <script setup>
+import { formatTime } from '@/utils/format'
+import { countBadgeClass } from '@/utils/reviewLevel'
+
 defineProps({
   word: { type: Object, required: true },
   mode: { type: String, default: 'active' }, // 'active' | 'archived'
 })
 defineEmits(['archive', 'unarchive', 'delete'])
-
-function formatTime(iso) {
-  const d = new Date(iso)
-  const pad = (n) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
-}
 </script>
 
 <template>
@@ -30,7 +27,7 @@ function formatTime(iso) {
       </div>
     </div>
     <div class="word-meta">
-      <span class="count">×{{ word.review_count }}</span>
+      <span :class="countBadgeClass(word.review_count)">×{{ word.review_count }}</span>
       <span class="time">{{ formatTime(word.last_reviewed_at) }}</span>
       <button v-if="mode === 'active'" class="archive-btn" @click="$emit('archive', word)">归档</button>
       <button v-else class="unarchive-btn" @click="$emit('unarchive', word)">取消归档</button>
@@ -93,14 +90,6 @@ function formatTime(iso) {
   align-items: center;
   gap: 10px;
   flex-shrink: 0;
-}
-.word-meta .count {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--accent);
-  background: var(--accent-soft);
-  padding: 3px 8px;
-  border-radius: 999px;
 }
 .word-meta .time {
   font-size: 12px;

@@ -3,23 +3,26 @@ import { onMounted, ref } from 'vue'
 import { apiGet } from '@/api/client'
 import { useWordStats } from '@/composables/useWordStats'
 
-const words = ref([])
+const stats = ref({
+  total_words: 0,
+  total_reviews: 0,
+  translating_count: 0,
+  review_buckets: [],
+  daily_additions: [],
+})
+const loaded = ref(false)
+const errorMsg = ref('')
 
-const {
-  totalReviews,
-  avgReviews,
-  translatingCount,
-  dailyTrend,
-  maxDailyCount,
-  reviewBuckets,
-  maxBucketCount,
-  staleWords,
-  barHeight,
-  daysSince,
-} = useWordStats(words)
+const { avgReviews, dailyTrend, maxDailyCount, reviewBuckets, maxBucketCount, barHeight } =
+  useWordStats(stats)
 
 onMounted(async () => {
-  words.value = await apiGet('/api/words')
+  try {
+    stats.value = await apiGet('/api/stats')
+    loaded.value = true
+  } catch {
+    errorMsg.value = '统计数据加载失败，请刷新重试'
+  }
 })
 </script>
 
@@ -27,14 +30,14 @@ onMounted(async () => {
   <div>
     <h1>统计</h1>
 
-    <template v-if="words.length">
+    <template v-if="stats.total_words">
       <div class="overview">
         <div class="card">
-          <div class="num">{{ words.length }}</div>
+          <div class="num">{{ stats.total_words }}</div>
           <div class="label">总词汇量</div>
         </div>
         <div class="card">
-          <div class="num">{{ totalReviews }}</div>
+          <div class="num">{{ stats.total_reviews }}</div>
           <div class="label">累计背诵次数</div>
         </div>
         <div class="card">
@@ -42,7 +45,7 @@ onMounted(async () => {
           <div class="label">平均背诵次数</div>
         </div>
         <div class="card">
-          <div class="num">{{ translatingCount }}</div>
+          <div class="num">{{ stats.translating_count }}</div>
           <div class="label">查词中</div>
         </div>
       </div>
@@ -69,28 +72,34 @@ onMounted(async () => {
         </div>
       </div>
 
-      <h2>最久未复习</h2>
-      <ul class="stale-list">
-        <li class="stale-item" v-for="w in staleWords" :key="w.id">
-          <span class="word">{{ w.display_word }}</span>
-          <span class="days">{{ daysSince(w.last_reviewed_at) }} 天未复习</span>
-        </li>
-      </ul>
     </template>
 
-    <div class="empty" v-else>还没有单词记录，先去背几个单词吧</div>
+    <div class="empty" v-else-if="errorMsg">{{ errorMsg }}</div>
+    <div class="empty" v-else-if="loaded">还没有单词记录，先去背几个单词吧</div>
   </div>
 </template>
 
 <style scoped>
 .overview {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  /* minmax(0, 1fr)：数字很长时 1fr 会被内容撑宽，四张卡就不等宽了 */
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
+  align-items: stretch;
 }
 .overview .card {
-  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 84px;
   padding: 16px 8px;
+  text-align: center;
+}
+/* main.css 的 .card + .card { margin-top: 16px } 会命中网格里第 2/3/4 张卡，
+   把它们整体往下推 16px——这就是头部四张卡看起来高低不齐的原因 */
+.overview .card + .card {
+  margin-top: 0;
 }
 .overview .num {
   font-size: 22px;
@@ -173,29 +182,9 @@ onMounted(async () => {
   text-align: right;
   flex-shrink: 0;
 }
-ul.stale-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.stale-item {
-  background: var(--card-bg);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 10px 14px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-.stale-item .word {
-  font-size: 15px;
-  font-weight: 600;
-}
-.stale-item .days {
-  font-size: 12px;
-  color: var(--muted);
+@media (max-width: 480px) {
+  .overview {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 </style>

@@ -113,8 +113,28 @@ func migrateSchema() {
 	migrateWordsUserIDColumn()
 	migrateWordsTranslatingColumn()
 	migrateWordsArchivedColumn()
+	migrateWordsUserArchivedIndex()
+	migrateUsersLastLoginColumn()
 	mergeHistoricalWordSenses()
 	backfillWordDictionary()
+}
+
+// migrateUsersLastLoginColumn 给 users 表补 last_login_at 列，记录最后一次成功登录的时间；
+// 历史用户在下次登录前保持 NULL，前端据此显示“从未登录”
+func migrateUsersLastLoginColumn() {
+	if columnExists("users", "last_login_at") {
+		return
+	}
+	mustExec(`ALTER TABLE users ADD COLUMN last_login_at DATETIME NULL`)
+}
+
+// migrateWordsUserArchivedIndex 给 words 表补 (user_id, archived) 索引，
+// 分页列表和统计聚合都按这两列过滤，没有索引时会退化成全表扫描
+func migrateWordsUserArchivedIndex() {
+	if indexExists("words", "idx_words_user_archived") {
+		return
+	}
+	mustExec(`ALTER TABLE words ADD KEY idx_words_user_archived (user_id, archived)`)
 }
 
 // migrateWordsSenses 给 words 表补 senses 列，并把老的 pos/translation 单值列打包迁移过去

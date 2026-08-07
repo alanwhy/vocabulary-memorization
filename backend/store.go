@@ -8,6 +8,32 @@ import (
 	"time"
 )
 
+// escapeLikePattern 转义 LIKE 模式里的元字符，让用户输入的 % 和 _ 只当普通字符匹配。
+// MySQL 的 LIKE 默认转义符是反斜杠，所以反斜杠自身也要先转义（顺序不能反）。
+func escapeLikePattern(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `%`, `\%`)
+	s = strings.ReplaceAll(s, `_`, `\_`)
+	return s
+}
+
+// likeContains 把关键字包成「包含匹配」的 LIKE 模式；关键字为空时退化为匹配全部
+func likeContains(keyword string) string {
+	if keyword == "" {
+		return "%"
+	}
+	return "%" + escapeLikePattern(keyword) + "%"
+}
+
+// nullTimePtr 把可为 NULL 的时间列转成 *time.Time，NULL 时返回 nil（JSON 里序列化为 null）
+func nullTimePtr(nt sql.NullTime) *time.Time {
+	if !nt.Valid {
+		return nil
+	}
+	t := nt.Time
+	return &t
+}
+
 // userRepo 封装 users 表的数据访问
 type userRepo struct{ db *sql.DB }
 
@@ -27,11 +53,19 @@ func (r *userRepo) Insert(ctx context.Context, username, passwordHash string, is
 func (r *userRepo) FindByUsername(ctx context.Context, username string) (User, string, error) {
 	var u User
 	var hash string
+	var lastLogin sql.NullTime
 	err := r.db.QueryRowContext(ctx,
-		`SELECT id, username, password_hash, is_admin, created_at FROM users WHERE username = ?`,
+		`SELECT id, username, password_hash, is_admin, created_at, last_login_at FROM users WHERE username = ?`,
 		username,
-	).Scan(&u.ID, &u.Username, &hash, &u.IsAdmin, &u.CreatedAt)
+	).Scan(&u.ID, &u.Username, &hash, &u.IsAdmin, &u.CreatedAt, &lastLogin)
+	u.LastLoginAt = nullTimePtr(lastLogin)
 	return u, hash, err
+}
+
+// RecordLogin 记录一次成功登录的时间
+func (r *userRepo) RecordLogin(ctx context.Context, id int, now time.Time) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE users SET last_login_at = ? WHERE id = ?`, now, id)
+	return err
 }
 
 func (r *userRepo) FindPasswordHash(ctx context.Context, id int) (string, error) {
@@ -48,22 +82,30 @@ func (r *userRepo) UpdatePasswordHash(ctx context.Context, id int, hash string) 
 	return res.RowsAffected()
 }
 
-func (r *userRepo) List(ctx context.Context) ([]User, error) {
-	rows, err := r.db.QueryContext(ctx, `SELECT id, username, is_admin, created_at FROM users ORDER BY id`)
+// List 管理员用户列表：LEFT JOIN 一次性把每个用户录入的单词数（含已归档）聚合出来，
+// 避免在 handler 里对每个用户各发一条 COUNT 查询
+func (r *userRepo) List(ctx context.Context) ([]UserWithStats, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT u.id, u.username, u.is_admin, u.created_at, u.last_login_at, COUNT(w.id)
+		 FROM users u LEFT JOIN words w ON w.user_id = u.id
+		 GROUP BY u.id, u.username, u.is_admin, u.created_at, u.last_login_at
+		 ORDER BY u.id`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	list := []User{}
+	list := []UserWithStats{}
 	for rows.Next() {
-		var u User
-		if err := rows.Scan(&u.ID, &u.Username, &u.IsAdmin, &u.CreatedAt); err != nil {
+		var u UserWithStats
+		var lastLogin sql.NullTime
+		if err := rows.Scan(&u.ID, &u.Username, &u.IsAdmin, &u.CreatedAt, &lastLogin, &u.WordCount); err != nil {
 			return nil, err
 		}
+		u.LastLoginAt = nullTimePtr(lastLogin)
 		list = append(list, u)
 	}
-	return list, nil
+	return list, rows.Err()
 }
 
 func (r *userRepo) CountAdmins(ctx context.Context) (int, error) {
@@ -93,12 +135,14 @@ func (r *sessionRepo) Create(ctx context.Context, token string, userID int, expi
 func (r *sessionRepo) FindWithUser(ctx context.Context, token string) (User, time.Time, error) {
 	var u User
 	var expiresAt time.Time
+	var lastLogin sql.NullTime
 	err := r.db.QueryRowContext(ctx,
-		`SELECT u.id, u.username, u.is_admin, u.created_at, s.expires_at
+		`SELECT u.id, u.username, u.is_admin, u.created_at, u.last_login_at, s.expires_at
 		 FROM sessions s JOIN users u ON u.id = s.user_id
 		 WHERE s.token = ?`,
 		token,
-	).Scan(&u.ID, &u.Username, &u.IsAdmin, &u.CreatedAt, &expiresAt)
+	).Scan(&u.ID, &u.Username, &u.IsAdmin, &u.CreatedAt, &lastLogin, &expiresAt)
+	u.LastLoginAt = nullTimePtr(lastLogin)
 	return u, expiresAt, err
 }
 
@@ -120,6 +164,45 @@ func (r *sessionRepo) DeleteByUser(ctx context.Context, userID int) error {
 func (r *sessionRepo) DeleteByUserExcept(ctx context.Context, userID int, exceptToken string) error {
 	_, err := r.db.ExecContext(ctx, `DELETE FROM sessions WHERE user_id = ? AND token != ?`, userID, exceptToken)
 	return err
+}
+
+// wordColumns words 表的完整列清单，配合 scanWordRows 使用，保证列顺序和扫描顺序一致
+const wordColumns = `id, word_key, display_word, senses, translating, archived, review_count, first_added_at, last_reviewed_at`
+
+// scanWordRows 按 wordColumns 的列顺序把结果集扫成 []Word 并解开 senses JSON
+func scanWordRows(rows *sql.Rows) ([]Word, error) {
+	defer rows.Close()
+
+	list := []Word{}
+	for rows.Next() {
+		var wd Word
+		var sensesRaw []byte
+		if err := rows.Scan(&wd.ID, &wd.WordKey, &wd.DisplayWord, &sensesRaw, &wd.Translating, &wd.Archived, &wd.ReviewCount, &wd.FirstAddedAt, &wd.LastReviewedAt); err != nil {
+			return nil, err
+		}
+		if len(sensesRaw) > 0 {
+			if err := json.Unmarshal(sensesRaw, &wd.Senses); err != nil {
+				return nil, err
+			}
+		}
+		list = append(list, wd)
+	}
+	return list, rows.Err()
+}
+
+// wordOrderBy 把前端传来的排序模式映射成固定的 ORDER BY 片段。
+// 这里必须走白名单：SQL 片段是拼接进语句的，绝不能让请求参数直接落进去。
+// 每种排序都以 id 收尾——review_count / last_reviewed_at / word_key 都不唯一，
+// 缺少唯一 tiebreaker 时 LIMIT/OFFSET 翻页会出现跨页重复或漏行。
+func wordOrderBy(sort string) string {
+	switch sort {
+	case "time":
+		return `last_reviewed_at DESC, id DESC`
+	case "alpha":
+		return `word_key ASC, id ASC`
+	default: // count：默认按背诵次数倒序
+		return `review_count DESC, last_reviewed_at DESC, id DESC`
+	}
 }
 
 // wordRepo 封装 words 表的数据访问
@@ -153,31 +236,23 @@ func (r *wordRepo) IncrementReview(ctx context.Context, id, newCount int, now ti
 	return err
 }
 
-func (r *wordRepo) List(ctx context.Context, userID int, archived bool) ([]Word, error) {
+// ListPage 按 sort 指定的顺序取一页单词；sort 只能是 wordOrderBy 认识的白名单值
+func (r *wordRepo) ListPage(ctx context.Context, userID int, archived bool, sort string, limit, offset int) ([]Word, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT id, word_key, display_word, senses, translating, archived, review_count, first_added_at, last_reviewed_at FROM words WHERE user_id = ? AND archived = ? ORDER BY review_count DESC, last_reviewed_at DESC`,
-		userID, archived,
+		`SELECT `+wordColumns+` FROM words WHERE user_id = ? AND archived = ?
+		 ORDER BY `+wordOrderBy(sort)+` LIMIT ? OFFSET ?`,
+		userID, archived, limit, offset,
 	)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	return scanWordRows(rows)
+}
 
-	list := []Word{}
-	for rows.Next() {
-		var wd Word
-		var sensesRaw []byte
-		if err := rows.Scan(&wd.ID, &wd.WordKey, &wd.DisplayWord, &sensesRaw, &wd.Translating, &wd.Archived, &wd.ReviewCount, &wd.FirstAddedAt, &wd.LastReviewedAt); err != nil {
-			return nil, err
-		}
-		if len(sensesRaw) > 0 {
-			if err := json.Unmarshal(sensesRaw, &wd.Senses); err != nil {
-				return nil, err
-			}
-		}
-		list = append(list, wd)
-	}
-	return list, nil
+func (r *wordRepo) CountByUser(ctx context.Context, userID int, archived bool) (int, error) {
+	var count int
+	err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM words WHERE user_id = ? AND archived = ?`, userID, archived).Scan(&count)
+	return count, err
 }
 
 func (r *wordRepo) Delete(ctx context.Context, id, userID int) (int64, error) {
@@ -217,7 +292,99 @@ func (r *wordRepo) FindTranslating(ctx context.Context) ([]Word, error) {
 		}
 		list = append(list, wd)
 	}
-	return list, nil
+	return list, rows.Err()
+}
+
+// FindTranslatingByUser 返回当前用户还在查词中的完整记录。前端轮询只拉这几条，
+// 按 id 就地替换已加载的列表项，不用整表重载（分页后重载会把滚动位置打回顶部）。
+func (r *wordRepo) FindTranslatingByUser(ctx context.Context, userID int) ([]Word, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT `+wordColumns+` FROM words WHERE user_id = ? AND translating = 1`, userID)
+	if err != nil {
+		return nil, err
+	}
+	return scanWordRows(rows)
+}
+
+// FindByIDs 按 id 批量取当前用户的单词。前端轮询查词结果时要拿到这几条的**当前**状态
+// （包含已经查完、translating 已置 0 的），只查 translating = 1 的话释义永远补不回列表。
+func (r *wordRepo) FindByIDs(ctx context.Context, userID int, ids []int) ([]Word, error) {
+	if len(ids) == 0 {
+		return []Word{}, nil
+	}
+	// 占位符个数按 id 数量生成，id 本身仍然全部走参数绑定，语句里不拼接任何用户输入
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
+	args := make([]interface{}, 0, len(ids)+1)
+	args = append(args, userID)
+	for _, id := range ids {
+		args = append(args, id)
+	}
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT `+wordColumns+` FROM words WHERE user_id = ? AND id IN (`+placeholders+`)`, args...)
+	if err != nil {
+		return nil, err
+	}
+	return scanWordRows(rows)
+}
+
+// Stats 统计页需要的聚合数值，用 3 条聚合 SQL 算出，不再把全量单词拉到前端。
+// SUM 在 0 行时返回 NULL，所以统一套 COALESCE 兜成 0。since 为本地时区的起始时间。
+func (r *wordRepo) Stats(ctx context.Context, userID int, since time.Time) (WordStats, error) {
+	var s WordStats
+
+	err := r.db.QueryRowContext(ctx,
+		`SELECT
+		   COALESCE(SUM(archived = 0), 0),
+		   COALESCE(SUM(archived = 1), 0),
+		   COUNT(*),
+		   COALESCE(SUM(CASE WHEN archived = 0 THEN review_count ELSE 0 END), 0),
+		   COALESCE(SUM(archived = 0 AND translating = 1), 0)
+		 FROM words WHERE user_id = ?`,
+		userID,
+	).Scan(&s.TotalWords, &s.ArchivedWords, &s.TotalAllWords, &s.TotalReviews, &s.TranslatingCount)
+	if err != nil {
+		return WordStats{}, err
+	}
+
+	// 分档口径与前端 reviewBuckets 的 4 个标签一一对应：1 次 / 2-3 次 / 4-6 次 / 7 次以上
+	buckets := make([]int, 4)
+	err = r.db.QueryRowContext(ctx,
+		`SELECT
+		   COALESCE(SUM(review_count = 1), 0),
+		   COALESCE(SUM(review_count BETWEEN 2 AND 3), 0),
+		   COALESCE(SUM(review_count BETWEEN 4 AND 6), 0),
+		   COALESCE(SUM(review_count >= 7), 0)
+		 FROM words WHERE user_id = ? AND archived = 0`,
+		userID,
+	).Scan(&buckets[0], &buckets[1], &buckets[2], &buckets[3])
+	if err != nil {
+		return WordStats{}, err
+	}
+	s.ReviewBuckets = buckets
+
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT DATE_FORMAT(first_added_at, '%Y-%m-%d') d, COUNT(*)
+		 FROM words WHERE user_id = ? AND archived = 0 AND first_added_at >= ?
+		 GROUP BY d ORDER BY d`,
+		userID, since,
+	)
+	if err != nil {
+		return WordStats{}, err
+	}
+	defer rows.Close()
+
+	s.DailyAdditions = []dailyCount{}
+	for rows.Next() {
+		var d dailyCount
+		if err := rows.Scan(&d.Date, &d.Count); err != nil {
+			return WordStats{}, err
+		}
+		s.DailyAdditions = append(s.DailyAdditions, d)
+	}
+	if err := rows.Err(); err != nil {
+		return WordStats{}, err
+	}
+	return s, nil
 }
 
 // dictionaryRepo 封装 word_dictionary 表的数据访问
@@ -248,18 +415,17 @@ func (r *dictionaryRepo) SaveSenses(ctx context.Context, wordKey string, sensesJ
 	return err
 }
 
-func (r *dictionaryRepo) List(ctx context.Context) ([]dictionaryEntry, error) {
-	rows, err := r.db.QueryContext(ctx, `SELECT word_key, display_word, senses, last_updated_at FROM word_dictionary ORDER BY last_updated_at DESC`)
-	if err != nil {
-		return nil, err
-	}
+// dictColumns word_dictionary 的列清单，配合 scanDictRows 使用
+const dictColumns = `word_key, display_word, senses, occurrence_count, last_updated_at`
+
+func scanDictRows(rows *sql.Rows) ([]dictionaryEntry, error) {
 	defer rows.Close()
 
 	entries := []dictionaryEntry{}
 	for rows.Next() {
 		var e dictionaryEntry
 		var sensesRaw []byte
-		if err := rows.Scan(&e.WordKey, &e.DisplayWord, &sensesRaw, &e.LastUpdatedAt); err != nil {
+		if err := rows.Scan(&e.WordKey, &e.DisplayWord, &sensesRaw, &e.OccurrenceCount, &e.LastUpdatedAt); err != nil {
 			return nil, err
 		}
 		if len(sensesRaw) > 0 {
@@ -269,7 +435,38 @@ func (r *dictionaryRepo) List(ctx context.Context) ([]dictionaryEntry, error) {
 		}
 		entries = append(entries, e)
 	}
-	return entries, nil
+	return entries, rows.Err()
+}
+
+// List 返回全量词库，供 CSV 导出使用（导出不分页）
+func (r *dictionaryRepo) List(ctx context.Context) ([]dictionaryEntry, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT `+dictColumns+` FROM word_dictionary ORDER BY last_updated_at DESC, word_key ASC`)
+	if err != nil {
+		return nil, err
+	}
+	return scanDictRows(rows)
+}
+
+// ListPage 取一页词库记录，keyword 非空时按单词模糊匹配（过滤下沉到数据库，前端不再本地过滤）
+func (r *dictionaryRepo) ListPage(ctx context.Context, keyword string, limit, offset int) ([]dictionaryEntry, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT `+dictColumns+` FROM word_dictionary WHERE word_key LIKE ?
+		 ORDER BY last_updated_at DESC, word_key ASC LIMIT ? OFFSET ?`,
+		likeContains(keyword), limit, offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return scanDictRows(rows)
+}
+
+func (r *dictionaryRepo) Count(ctx context.Context, keyword string) (int, error) {
+	var count int
+	err := r.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM word_dictionary WHERE word_key LIKE ?`, likeContains(keyword),
+	).Scan(&count)
+	return count, err
 }
 
 func (r *dictionaryRepo) Delete(ctx context.Context, wordKey string) error {

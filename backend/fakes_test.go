@@ -9,7 +9,8 @@ import (
 // fakeUserStore 是 userStore 的手写 fake 实现，测试登录/改密码等 handler 时用它替换掉真实数据库
 type fakeUserStore struct {
 	usersByName map[string]User
-	hashes      map[int]string // userID -> password hash
+	hashes      map[int]string    // userID -> password hash
+	logins      map[int]time.Time // userID -> 最后一次 RecordLogin 收到的时间
 	nextID      int
 }
 
@@ -17,6 +18,7 @@ func newFakeUserStore() *fakeUserStore {
 	return &fakeUserStore{
 		usersByName: map[string]User{},
 		hashes:      map[int]string{},
+		logins:      map[int]time.Time{},
 		nextID:      1,
 	}
 }
@@ -57,10 +59,15 @@ func (f *fakeUserStore) UpdatePasswordHash(ctx context.Context, id int, hash str
 	return 1, nil
 }
 
-func (f *fakeUserStore) List(ctx context.Context) ([]User, error) {
-	list := make([]User, 0, len(f.usersByName))
+func (f *fakeUserStore) RecordLogin(ctx context.Context, id int, now time.Time) error {
+	f.logins[id] = now
+	return nil
+}
+
+func (f *fakeUserStore) List(ctx context.Context) ([]UserWithStats, error) {
+	list := make([]UserWithStats, 0, len(f.usersByName))
 	for _, u := range f.usersByName {
-		list = append(list, u)
+		list = append(list, UserWithStats{User: u})
 	}
 	return list, nil
 }

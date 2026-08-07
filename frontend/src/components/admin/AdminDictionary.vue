@@ -1,25 +1,34 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { onMounted, onUnmounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { apiGet, apiDelete } from '@/api/client'
+import { usePaginatedList } from '@/composables/usePaginatedList'
+import { useInfiniteScroll } from '@/composables/useInfiniteScroll'
+import { formatTime } from '@/utils/format'
+import { countBadgeClass } from '@/utils/reviewLevel'
 
-const dictEntries = ref([])
 const dictFilter = ref('')
-const filteredDictEntries = computed(() => {
-  const kw = dictFilter.value.trim().toLowerCase()
-  if (!kw) return dictEntries.value
-  return dictEntries.value.filter((d) => d.word_key.includes(kw))
+
+// 过滤交给后端：词库可能有上万条，本地过滤前提是先把整张表拉下来
+const list = usePaginatedList((page, limit) =>
+  apiGet(
+    `/api/admin/dictionary?keyword=${encodeURIComponent(dictFilter.value.trim())}&page=${page}&limit=${limit}`,
+  ),
+)
+const { items: dictEntries, total, loading, hasMore, loaded, errorMsg, reset, loadMore } = list
+
+const sentinelRef = ref(null)
+useInfiniteScroll(sentinelRef, loadMore)
+
+// 输入一个字符就打一次接口太浪费，停手 300ms 后再回到第一页重查
+let filterTimer = null
+watch(dictFilter, () => {
+  if (filterTimer) clearTimeout(filterTimer)
+  filterTimer = setTimeout(reset, 300)
 })
-
-function formatTime(iso) {
-  const d = new Date(iso)
-  const pad = (n) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
-}
-
-async function loadDictionary() {
-  dictEntries.value = await apiGet('/api/admin/dictionary')
-}
+onUnmounted(() => {
+  if (filterTimer) clearTimeout(filterTimer)
+})
 
 async function deleteDictEntry(d) {
   try {
@@ -33,13 +42,13 @@ async function deleteDictEntry(d) {
   }
   try {
     await apiDelete(`/api/admin/dictionary/${encodeURIComponent(d.word_key)}`)
-    dictEntries.value = dictEntries.value.filter((x) => x.word_key !== d.word_key)
+    list.removeItem((x) => x.word_key === d.word_key)
   } catch {
     ElMessage.error('删除失败，请重试')
   }
 }
 
-onMounted(loadDictionary)
+onMounted(reset)
 </script>
 
 <template>
@@ -52,12 +61,13 @@ onMounted(loadDictionary)
         <tr>
           <th>单词</th>
           <th>释义</th>
+          <th>出现次数</th>
           <th>最后更新时间</th>
           <th>操作</th>
         </tr>
       </thead>
       <tbody>
-        <tr v-for="d in filteredDictEntries" :key="d.word_key">
+        <tr v-for="d in dictEntries" :key="d.word_key">
           <td>{{ d.display_word }}</td>
           <td>
             <div class="senses" v-if="d.senses && d.senses.length">
@@ -68,11 +78,24 @@ onMounted(loadDictionary)
             </div>
             <span v-else>暂无释义</span>
           </td>
+          <td><span :class="countBadgeClass(d.occurrence_count)">×{{ d.occurrence_count }}</span></td>
           <td>{{ formatTime(d.last_updated_at) }}</td>
           <td><button class="link-btn danger" @click="deleteDictEntry(d)">删除</button></td>
         </tr>
       </tbody>
     </table>
-    <p class="msg" v-if="!dictEntries.length">词库暂无数据</p>
+    <div v-if="hasMore" ref="sentinelRef" class="sentinel"></div>
+    <p class="msg" v-if="errorMsg">{{ errorMsg }}</p>
+    <p class="msg" v-else-if="loading">加载中…</p>
+    <p class="msg" v-else-if="!dictEntries.length && loaded">
+      {{ dictFilter.trim() ? '没有匹配的单词' : '词库暂无数据' }}
+    </p>
+    <p class="msg" v-else-if="dictEntries.length">共 {{ total }} 条，已加载 {{ dictEntries.length }} 条</p>
   </div>
 </template>
+
+<style scoped>
+.sentinel {
+  height: 1px;
+}
+</style>

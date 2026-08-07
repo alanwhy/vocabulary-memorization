@@ -224,6 +224,12 @@ func (a *App) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 记录最后登录时间；这只是展示用的信息，写失败不该拦住已经通过校验的登录
+	if err := a.users.RecordLogin(r.Context(), user.ID, now); err != nil {
+		log.Printf("记录最后登录时间失败 user_id=%d: %v", user.ID, err)
+	}
+	user.LastLoginAt = &now
+
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,
 		Value:    token,

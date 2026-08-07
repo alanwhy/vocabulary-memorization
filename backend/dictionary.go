@@ -48,10 +48,11 @@ func (a *App) saveDictionarySenses(ctx context.Context, wordKey string, senses [
 }
 
 type dictionaryEntry struct {
-	WordKey       string    `json:"word_key"`
-	DisplayWord   string    `json:"display_word"`
-	Senses        []Sense   `json:"senses"`
-	LastUpdatedAt time.Time `json:"last_updated_at"`
+	WordKey         string    `json:"word_key"`
+	DisplayWord     string    `json:"display_word"`
+	Senses          []Sense   `json:"senses"`
+	OccurrenceCount int       `json:"occurrence_count"`
+	LastUpdatedAt   time.Time `json:"last_updated_at"`
 }
 
 // formatSenses 把释义拼成一段可读文本，如 "n. 名词；v. 动词"，用于导出等纯文本场景
@@ -67,15 +68,25 @@ func formatSenses(senses []Sense) string {
 	return strings.Join(parts, "；")
 }
 
-// handleListDictionary 管理员查看全局词库：单词、释义、最后更新时间
+// handleListDictionary 管理员查看全局词库：单词、释义、出现次数、最后更新时间。
+// 分页 + 关键字过滤都在数据库侧完成，前端只渲染当前页。
 func (a *App) handleListDictionary(w http.ResponseWriter, r *http.Request) {
-	entries, err := a.dict.List(r.Context())
+	page, limit, offset := parsePagination(r)
+	keyword := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("keyword")))
+
+	total, err := a.dict.Count(r.Context(), keyword)
+	if err != nil {
+		log.Printf("统计词库总数失败: %v", err)
+		writeError(w, http.StatusInternalServerError, "查询失败")
+		return
+	}
+	entries, err := a.dict.ListPage(r.Context(), keyword, limit, offset)
 	if err != nil {
 		log.Printf("查询词库失败: %v", err)
 		writeError(w, http.StatusInternalServerError, "查询失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, entries)
+	writeJSON(w, http.StatusOK, newPageResult(entries, total, page, limit))
 }
 
 // handleExportDictionary 管理员导出全局词库为 CSV，带 UTF-8 BOM 保证 Excel 打开中文不乱码

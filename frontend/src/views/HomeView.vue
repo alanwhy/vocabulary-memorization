@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { apiGet, apiPost } from '@/api/client'
+import { usePaginatedList } from '@/composables/usePaginatedList'
 import { useWordActions } from '@/composables/useWordActions'
 import { useTranslatingPoll } from '@/composables/useTranslatingPoll'
 import LoginForm from '@/components/auth/LoginForm.vue'
@@ -11,64 +12,94 @@ const auth = useAuthStore()
 
 const inputWord = ref('')
 const wordInputRef = ref(null)
-const words = ref([])
 const submitting = ref(false)
-const errorMsg = ref('')
+const submitError = ref('')
 const placeholderHint = '重复输入同一个单词会累加背诵次数'
 const sortMode = ref(localStorage.getItem('vocab_sort_mode') || 'count')
 
-const totalReviews = computed(() => words.value.reduce((sum, w) => sum + w.review_count, 0))
+// 排序交给后端：分页后前端手里只有当前几页，本地排序会排出错误的顺序
+const list = usePaginatedList((page, limit) =>
+  apiGet(`/api/words?archived=0&sort=${sortMode.value}&page=${page}&limit=${limit}`),
+)
+const { items: words, loading, hasMore, loaded, errorMsg: listError, reset, loadMore } = list
 
-const { archiveWord, deleteWord } = useWordActions(words)
-const { scheduleIfNeeded, stop } = useTranslatingPoll(words, loadWords)
+// 顶部两个数字走 /api/stats，和列表 total 分开：total 只反映未归档的当前页条件，
+// 而累计背诵次数必须由后端聚合，前端拿不到全量数据自己加。
+const stats = ref({ total_words: 0, total_reviews: 0 })
+
+const hintText = computed(() => submitError.value || listError.value || placeholderHint)
+const hasError = computed(() => !!(submitError.value || listError.value))
+
+const { archiveWord, deleteWord } = useWordActions(list, { onRemoved: dropFromStats })
+const { scheduleIfNeeded, stop } = useTranslatingPoll(words, mergeTranslating)
+
+function dropFromStats(w) {
+  stats.value = {
+    ...stats.value,
+    total_words: Math.max(0, stats.value.total_words - 1),
+    total_reviews: Math.max(0, stats.value.total_reviews - w.review_count),
+  }
+}
+
+async function loadStats() {
+  try {
+    stats.value = await apiGet('/api/stats')
+  } catch {
+    // 顶部只是两个数字，拉不到就保持旧值，不用打扰正在录入的用户
+  }
+}
 
 function setSortMode(mode) {
+  if (mode === sortMode.value) return
   sortMode.value = mode
   localStorage.setItem('vocab_sort_mode', mode)
-  sortWords()
+  reload()
 }
 
-function sortWords() {
-  words.value.sort((a, b) => {
-    if (sortMode.value === 'time') {
-      return new Date(b.last_reviewed_at) - new Date(a.last_reviewed_at)
-    }
-    if (sortMode.value === 'alpha') {
-      return a.word_key.localeCompare(b.word_key)
-    }
-    if (b.review_count !== a.review_count) return b.review_count - a.review_count
-    return new Date(b.last_reviewed_at) - new Date(a.last_reviewed_at)
-  })
+async function reload() {
+  await reset()
+  scheduleIfNeeded()
 }
 
-async function loadWords() {
-  try {
-    words.value = await apiGet('/api/words')
-    sortWords()
-    scheduleIfNeeded()
-  } catch {
-    errorMsg.value = '列表加载失败，请刷新重试'
+// mergeTranslating 只把查词中的那几条 patch 回已加载的列表，不整表重载：
+// 重载会把滚动加载出来的第 2、3…页全丢掉，滚动位置也跟着跳。
+async function mergeTranslating() {
+  const pendingIds = words.value.filter((w) => w.translating).map((w) => w.id)
+  if (!pendingIds.length) {
+    stop()
+    return
   }
+  let fresh
+  try {
+    fresh = await apiGet(`/api/words/translating?ids=${pendingIds.join(',')}`)
+  } catch {
+    return // 轮询失败就等下一次，不打断页面
+  }
+  const byId = new Map(fresh.map((w) => [w.id, w]))
+  words.value = words.value.map((w) => byId.get(w.id) || w)
+  scheduleIfNeeded()
 }
 
 async function submitWord() {
   const word = inputWord.value.trim()
   if (!word || submitting.value) return
   submitting.value = true
-  errorMsg.value = ''
+  submitError.value = ''
   try {
     const data = await apiPost('/api/words', { word })
     const idx = words.value.findIndex((w) => w.id === data.id)
     if (idx >= 0) {
+      // 已在当前页面上：原地替换，次数和释义立刻更新，顺序留到下次重新加载时再纠正
       words.value[idx] = data
     } else {
-      words.value.push(data)
+      // 不在已加载的页里（新词，或排在后面的页）：插到最前面，让用户马上看见刚录入的词
+      words.value = [data, ...words.value]
     }
-    sortWords()
-    scheduleIfNeeded()
     inputWord.value = ''
+    scheduleIfNeeded()
+    loadStats()
   } catch (e) {
-    errorMsg.value = e.message || '记录失败'
+    submitError.value = e.message || '记录失败'
   } finally {
     submitting.value = false
     await nextTick()
@@ -80,7 +111,8 @@ watch(
   () => auth.isAuthenticated,
   (isAuth) => {
     if (isAuth) {
-      loadWords()
+      reload()
+      loadStats()
     } else {
       words.value = []
       stop()
@@ -89,7 +121,10 @@ watch(
 )
 
 onMounted(() => {
-  if (auth.isAuthenticated) loadWords()
+  if (auth.isAuthenticated) {
+    reload()
+    loadStats()
+  }
 })
 </script>
 
@@ -110,10 +145,10 @@ onMounted(() => {
         />
         <button class="add-btn" :disabled="submitting" @click="submitWord">添加</button>
       </div>
-      <p class="hint" :class="{ error: !!errorMsg }">{{ errorMsg || placeholderHint }}</p>
+      <p class="hint" :class="{ error: hasError }">{{ hintText }}</p>
 
       <div class="stats" v-if="words.length">
-        <span>共 {{ words.length }} 个单词 · 累计背诵 {{ totalReviews }} 次</span>
+        <span>共 {{ stats.total_words }} 个单词 · 累计背诵 {{ stats.total_reviews }} 次</span>
         <span class="sort-toggle">
           <button :class="{ active: sortMode === 'count' }" @click="setSortMode('count')">按次数</button>
           <button :class="{ active: sortMode === 'time' }" @click="setSortMode('time')">按时间</button>
@@ -125,11 +160,14 @@ onMounted(() => {
         :words="words"
         mode="active"
         empty-text="还没有记录，输入一个单词试试"
+        :loading="loading || !loaded"
+        :has-more="hasMore"
         @archive="archiveWord"
         @delete="deleteWord"
+        @load-more="loadMore"
       />
     </div>
-    <div class="footer">v1.6.0</div>
+    <div class="footer">v1.7.0</div>
   </div>
 </template>
 
