@@ -329,8 +329,9 @@ func (r *wordRepo) FindByIDs(ctx context.Context, userID int, ids []int) ([]Word
 
 // Stats 统计页需要的聚合数值，用 3 条聚合 SQL 算出，不再把全量单词拉到前端。
 // SUM 在 0 行时返回 NULL，所以统一套 COALESCE 兜成 0。since 为本地时区的起始时间。
-// todaySince 为「今天本地零点」，用于单独统计今日被复习过的单词次数之和。
-func (r *wordRepo) Stats(ctx context.Context, userID int, since, todaySince time.Time) (WordStats, error) {
+// todaySince / todayUntil 划定今日背诵次数的统计窗口：[00:00:00, 23:59:59.999...)，
+// 对窗口内被复习过的每个单词计数 1（不累计历史 review_count），避免把历史背诵次数也加进来。
+func (r *wordRepo) Stats(ctx context.Context, userID int, since, todaySince, todayUntil time.Time) (WordStats, error) {
 	var s WordStats
 
 	err := r.db.QueryRowContext(ctx,
@@ -340,9 +341,9 @@ func (r *wordRepo) Stats(ctx context.Context, userID int, since, todaySince time
 		   COUNT(*),
 		   COALESCE(SUM(CASE WHEN archived = 0 THEN review_count ELSE 0 END), 0),
 		   COALESCE(SUM(archived = 0 AND translating = 1), 0),
-		   COALESCE(SUM(CASE WHEN archived = 0 AND last_reviewed_at >= ? THEN review_count ELSE 0 END), 0)
+		   COALESCE(SUM(CASE WHEN archived = 0 AND last_reviewed_at >= ? AND last_reviewed_at < ? THEN 1 ELSE 0 END), 0)
 		 FROM words WHERE user_id = ?`,
-		todaySince, userID,
+		todaySince, todayUntil, userID,
 	).Scan(&s.TotalWords, &s.ArchivedWords, &s.TotalAllWords, &s.TotalReviews, &s.TranslatingCount, &s.TodayReviews)
 	if err != nil {
 		return WordStats{}, err

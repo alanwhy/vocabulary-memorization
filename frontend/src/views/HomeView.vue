@@ -25,7 +25,7 @@ const { items: words, loading, hasMore, loaded, errorMsg: listError, reset, load
 
 // 顶部两个数字走 /api/stats，和列表 total 分开：total 只反映未归档的当前页条件，
 // 而累计背诵次数必须由后端聚合，前端拿不到全量数据自己加。
-const stats = ref({ total_words: 0, total_reviews: 0 })
+const stats = ref({ total_words: 0, total_reviews: 0, today_reviews: 0 })
 
 const hintText = computed(() => submitError.value || listError.value || placeholderHint)
 const hasError = computed(() => !!(submitError.value || listError.value))
@@ -180,7 +180,7 @@ onMounted(() => {
         @load-more="loadMore"
       />
     </div>
-    <div class="footer">v1.8.0</div>
+    <div class="footer">v1.8.1</div>
   </div>
 </template>
 

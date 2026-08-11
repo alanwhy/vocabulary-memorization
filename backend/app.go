@@ -47,7 +47,7 @@ type wordStore interface {
 	FindTranslating(ctx context.Context) ([]Word, error)
 	FindTranslatingByUser(ctx context.Context, userID int) ([]Word, error)
 	FindByIDs(ctx context.Context, userID int, ids []int) ([]Word, error)
-	Stats(ctx context.Context, userID int, since, todaySince time.Time) (WordStats, error)
+	Stats(ctx context.Context, userID int, since, todaySince, todayUntil time.Time) (WordStats, error)
 }
 
 type dictionaryStore interface {

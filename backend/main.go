@@ -405,12 +405,14 @@ func (a *App) handleListTranslatingWords(w http.ResponseWriter, r *http.Request)
 // 这些数字必须由后端用 SQL 聚合算出。
 func (a *App) handleWordStats(w http.ResponseWriter, r *http.Request) {
 	user := currentUser(r)
-	// 趋势图展示最近 statsTrendDays 天（含今天），起点取本地时区当天零点
+	// 趋势图展示最近 statsTrendDays 天（含今天），起点取本地时区当天零点。
+	// todaySince / todayUntil 划定今日背诵次数的统计窗口：[00:00:00, 23:59:59.999...)
 	now := time.Now()
 	midnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	tomorrowMidnight := midnight.AddDate(0, 0, 1)
 	since := midnight.AddDate(0, 0, -(statsTrendDays - 1))
 
-	stats, err := a.words.Stats(r.Context(), user.ID, since, midnight)
+	stats, err := a.words.Stats(r.Context(), user.ID, since, midnight, tomorrowMidnight)
 	if err != nil {
 		log.Printf("查询统计数据失败: %v", err)
 		writeError(w, http.StatusInternalServerError, "查询失败")
