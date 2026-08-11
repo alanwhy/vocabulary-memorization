@@ -47,7 +47,7 @@ type wordStore interface {
 	FindTranslating(ctx context.Context) ([]Word, error)
 	FindTranslatingByUser(ctx context.Context, userID int) ([]Word, error)
 	FindByIDs(ctx context.Context, userID int, ids []int) ([]Word, error)
-	Stats(ctx context.Context, userID int, since time.Time) (WordStats, error)
+	Stats(ctx context.Context, userID int, since, todaySince time.Time) (WordStats, error)
 }
 
 type dictionaryStore interface {
@@ -58,6 +58,7 @@ type dictionaryStore interface {
 	ListPage(ctx context.Context, keyword string, limit, offset int) ([]dictionaryEntry, error)
 	Count(ctx context.Context, keyword string) (int, error)
 	Delete(ctx context.Context, wordKey string) error
+	DeleteMany(ctx context.Context, wordKeys []string) (int64, error)
 }
 
 type settingsStore interface {

@@ -329,7 +329,8 @@ func (r *wordRepo) FindByIDs(ctx context.Context, userID int, ids []int) ([]Word
 
 // Stats 统计页需要的聚合数值，用 3 条聚合 SQL 算出，不再把全量单词拉到前端。
 // SUM 在 0 行时返回 NULL，所以统一套 COALESCE 兜成 0。since 为本地时区的起始时间。
-func (r *wordRepo) Stats(ctx context.Context, userID int, since time.Time) (WordStats, error) {
+// todaySince 为「今天本地零点」，用于单独统计今日被复习过的单词次数之和。
+func (r *wordRepo) Stats(ctx context.Context, userID int, since, todaySince time.Time) (WordStats, error) {
 	var s WordStats
 
 	err := r.db.QueryRowContext(ctx,
@@ -338,10 +339,11 @@ func (r *wordRepo) Stats(ctx context.Context, userID int, since time.Time) (Word
 		   COALESCE(SUM(archived = 1), 0),
 		   COUNT(*),
 		   COALESCE(SUM(CASE WHEN archived = 0 THEN review_count ELSE 0 END), 0),
-		   COALESCE(SUM(archived = 0 AND translating = 1), 0)
+		   COALESCE(SUM(archived = 0 AND translating = 1), 0),
+		   COALESCE(SUM(CASE WHEN archived = 0 AND last_reviewed_at >= ? THEN review_count ELSE 0 END), 0)
 		 FROM words WHERE user_id = ?`,
-		userID,
-	).Scan(&s.TotalWords, &s.ArchivedWords, &s.TotalAllWords, &s.TotalReviews, &s.TranslatingCount)
+		todaySince, userID,
+	).Scan(&s.TotalWords, &s.ArchivedWords, &s.TotalAllWords, &s.TotalReviews, &s.TranslatingCount, &s.TodayReviews)
 	if err != nil {
 		return WordStats{}, err
 	}
@@ -448,13 +450,30 @@ func (r *dictionaryRepo) List(ctx context.Context) ([]dictionaryEntry, error) {
 	return scanDictRows(rows)
 }
 
-// ListPage 取一页词库记录，keyword 非空时按单词模糊匹配（过滤下沉到数据库，前端不再本地过滤）
+// ListPage 取一页词库记录。keyword 非空时同时匹配单词和释义（释义通过 JSON_SEARCH
+// 在 senses JSON 数组里查找），过滤下沉到数据库，前端不再本地过滤。
 func (r *dictionaryRepo) ListPage(ctx context.Context, keyword string, limit, offset int) ([]dictionaryEntry, error) {
-	rows, err := r.db.QueryContext(ctx,
-		`SELECT `+dictColumns+` FROM word_dictionary WHERE word_key LIKE ?
-		 ORDER BY last_updated_at DESC, word_key ASC LIMIT ? OFFSET ?`,
-		likeContains(keyword), limit, offset,
+	var (
+		rows *sql.Rows
+		err  error
 	)
+	if keyword == "" {
+		rows, err = r.db.QueryContext(ctx,
+			`SELECT `+dictColumns+` FROM word_dictionary
+			 ORDER BY last_updated_at DESC, word_key ASC LIMIT ? OFFSET ?`,
+			limit, offset,
+		)
+	} else {
+		like := likeContains(keyword)
+		// JSON_SEARCH 第二个参数 'one' 表示匹配到一条即可；senses 数组里的对象形如
+		// {"pos":"n.","translation":"名词"}，'$.translation' 指只对 translation 字段做匹配。
+		rows, err = r.db.QueryContext(ctx,
+			`SELECT `+dictColumns+` FROM word_dictionary
+			 WHERE word_key LIKE ? OR JSON_SEARCH(senses, 'one', ?, NULL, '$.translation') IS NOT NULL
+			 ORDER BY last_updated_at DESC, word_key ASC LIMIT ? OFFSET ?`,
+			like, like, limit, offset,
+		)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -463,15 +482,45 @@ func (r *dictionaryRepo) ListPage(ctx context.Context, keyword string, limit, of
 
 func (r *dictionaryRepo) Count(ctx context.Context, keyword string) (int, error) {
 	var count int
-	err := r.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM word_dictionary WHERE word_key LIKE ?`, likeContains(keyword),
-	).Scan(&count)
+	var err error
+	if keyword == "" {
+		err = r.db.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM word_dictionary`,
+		).Scan(&count)
+	} else {
+		like := likeContains(keyword)
+		err = r.db.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM word_dictionary
+			 WHERE word_key LIKE ? OR JSON_SEARCH(senses, 'one', ?, NULL, '$.translation') IS NOT NULL`,
+			like, like,
+		).Scan(&count)
+	}
 	return count, err
 }
 
 func (r *dictionaryRepo) Delete(ctx context.Context, wordKey string) error {
 	_, err := r.db.ExecContext(ctx, `DELETE FROM word_dictionary WHERE word_key = ?`, wordKey)
 	return err
+}
+
+// DeleteMany 批量删除词库缓存；wordKeys 为空时直接返回。占位符按数量生成，
+// 但 wordKey 本身仍然走参数绑定，语句里不拼接任何用户输入。
+// 上限取 maxPageLimit，避免一次提交删除过多记录。
+func (r *dictionaryRepo) DeleteMany(ctx context.Context, wordKeys []string) (int64, error) {
+	if len(wordKeys) == 0 {
+		return 0, nil
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(wordKeys)), ",")
+	args := make([]interface{}, len(wordKeys))
+	for i, k := range wordKeys {
+		args[i] = k
+	}
+	res, err := r.db.ExecContext(ctx,
+		`DELETE FROM word_dictionary WHERE word_key IN (`+placeholders+`)`, args...)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }
 
 // settingsRepo 封装 settings 表的数据访问

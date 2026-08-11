@@ -101,6 +101,7 @@ type WordStats struct {
 	ArchivedWords    int          `json:"archived_words"`
 	TotalAllWords    int          `json:"total_all_words"`
 	TotalReviews     int          `json:"total_reviews"`
+	TodayReviews     int          `json:"today_reviews"`
 	TranslatingCount int          `json:"translating_count"`
 	ReviewBuckets    []int        `json:"review_buckets"`
 	DailyAdditions   []dailyCount `json:"daily_additions"`

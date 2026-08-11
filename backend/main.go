@@ -78,6 +78,7 @@ func main() {
 	mux.HandleFunc("GET /api/admin/dictionary", withTimeout(defaultRequestTimeout)(app.requireAdmin(app.handleListDictionary)))
 	mux.HandleFunc("GET /api/admin/dictionary/export", withTimeout(exportRequestTimeout)(app.requireAdmin(app.handleExportDictionary)))
 	mux.HandleFunc("DELETE /api/admin/dictionary/{word_key}", withTimeout(defaultRequestTimeout)(app.requireAdmin(app.handleDeleteDictionaryEntry)))
+	mux.HandleFunc("POST /api/admin/dictionary/batch-delete", withTimeout(defaultRequestTimeout)(app.requireAdmin(app.handleDeleteDictionaryBatch)))
 
 	mux.HandleFunc("/", spaHandler)
 
@@ -409,7 +410,7 @@ func (a *App) handleWordStats(w http.ResponseWriter, r *http.Request) {
 	midnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 	since := midnight.AddDate(0, 0, -(statsTrendDays - 1))
 
-	stats, err := a.words.Stats(r.Context(), user.ID, since)
+	stats, err := a.words.Stats(r.Context(), user.ID, since, midnight)
 	if err != nil {
 		log.Printf("查询统计数据失败: %v", err)
 		writeError(w, http.StatusInternalServerError, "查询失败")

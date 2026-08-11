@@ -38,6 +38,7 @@ function dropFromStats(w) {
     ...stats.value,
     total_words: Math.max(0, stats.value.total_words - 1),
     total_reviews: Math.max(0, stats.value.total_reviews - w.review_count),
+    today_reviews: Math.max(0, (stats.value.today_reviews || 0) - w.review_count),
   }
 }
 
@@ -89,11 +90,23 @@ async function submitWord() {
     const data = await apiPost('/api/words', { word })
     const idx = words.value.findIndex((w) => w.id === data.id)
     if (idx >= 0) {
-      // 已在当前页面上：原地替换，次数和释义立刻更新，顺序留到下次重新加载时再纠正
-      words.value[idx] = data
+      // 已存在：累加次数 + 更新最近背诵时间后，顺序在「按次数」「按时间」两种排序下都会变，
+      // 但只有首页前几条能直观反映这一变化。如果不在第一页，直接 reload 让后端重新排序；
+      // 在第一页的话就地调整：按时间排则挪到最顶，按次数排则按当前次数插到正确位置。
+      if (sortMode.value === 'time') {
+        words.value.splice(idx, 1)
+        words.value.unshift(data)
+      } else if (sortMode.value === 'count') {
+        words.value.splice(idx, 1)
+        const insertAt = words.value.findIndex((w) => w.review_count < data.review_count)
+        words.value.splice(insertAt === -1 ? words.value.length : insertAt, 0, data)
+      } else {
+        // 字母排序：次数变化不影响顺序，原地替换即可
+        words.value[idx] = data
+      }
     } else {
       // 不在已加载的页里（新词，或排在后面的页）：插到最前面，让用户马上看见刚录入的词
-      words.value = [data, ...words.value]
+      words.value.unshift(data)
     }
     inputWord.value = ''
     scheduleIfNeeded()
@@ -148,7 +161,7 @@ onMounted(() => {
       <p class="hint" :class="{ error: hasError }">{{ hintText }}</p>
 
       <div class="stats" v-if="words.length">
-        <span>共 {{ stats.total_words }} 个单词 · 累计背诵 {{ stats.total_reviews }} 次</span>
+        <span>共 {{ stats.total_words }} 个单词 · 累计背诵 {{ stats.total_reviews }} 次 · 今日 {{ stats.today_reviews || 0 }} 次</span>
         <span class="sort-toggle">
           <button :class="{ active: sortMode === 'count' }" @click="setSortMode('count')">按次数</button>
           <button :class="{ active: sortMode === 'time' }" @click="setSortMode('time')">按时间</button>
@@ -167,7 +180,7 @@ onMounted(() => {
         @load-more="loadMore"
       />
     </div>
-    <div class="footer">v1.7.0</div>
+    <div class="footer">v1.8.0</div>
   </div>
 </template>
 

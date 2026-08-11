@@ -121,3 +121,35 @@ func (a *App) handleDeleteDictionaryEntry(w http.ResponseWriter, r *http.Request
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
+
+type deleteDictionaryBatchRequest struct {
+	WordKeys []string `json:"word_keys"`
+}
+
+// handleDeleteDictionaryBatch 管理员批量删除词库缓存；上限 maxPageLimit 条，
+// 超出取前 N 条直接执行，避免一次提交删除过多记录拖慢数据库。
+func (a *App) handleDeleteDictionaryBatch(w http.ResponseWriter, r *http.Request) {
+	var req deleteDictionaryBatchRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "请求格式不正确")
+		return
+	}
+	keys := make([]string, 0, len(req.WordKeys))
+	for _, k := range req.WordKeys {
+		k = strings.ToLower(strings.TrimSpace(k))
+		if k == "" {
+			continue
+		}
+		keys = append(keys, k)
+	}
+	if len(keys) > maxPageLimit {
+		keys = keys[:maxPageLimit]
+	}
+	affected, err := a.dict.DeleteMany(r.Context(), keys)
+	if err != nil {
+		log.Printf("批量删除词库记录失败: %v", err)
+		writeError(w, http.StatusInternalServerError, "删除失败")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int64{"deleted": affected})
+}
