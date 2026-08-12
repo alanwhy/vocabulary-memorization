@@ -117,6 +117,7 @@ func migrateSchema() {
 	migrateUsersLastLoginColumn()
 	mergeHistoricalWordSenses()
 	backfillWordDictionary()
+	migrateTimestampsToCST()
 }
 
 // migrateUsersLastLoginColumn 给 users 表补 last_login_at 列，记录最后一次成功登录的时间；
@@ -311,6 +312,34 @@ func indexExists(table, indexName string) bool {
 		log.Fatalf("检查索引是否存在失败 table=%s index=%s: %v", table, indexName, err)
 	}
 	return count > 0
+}
+
+// migrateTimestampsToCST 一次性把所有 DATETIME 列从 UTC 转换到 CST（+8 小时），
+// 解决容器此前一直在 UTC 时区运行导致的时间戳偏移问题。用 settings 表的
+// timestamps_migrated_to_cst 作为哨兵，确保只执行一次。
+func migrateTimestampsToCST() {
+	var done int
+	err := db.QueryRow(`SELECT COUNT(*) FROM settings WHERE name = 'timestamps_migrated_to_cst' AND value = '1'`).Scan(&done)
+	if err != nil {
+		log.Fatalf("检查时间戳迁移哨兵失败: %v", err)
+	}
+	if done > 0 {
+		return
+	}
+
+	log.Println("开始迁移历史时间戳 UTC → CST (+8h)...")
+
+	// 所有含 DATETIME 列的表，统一加 8 小时
+	mustExec(`UPDATE words SET first_added_at = DATE_ADD(first_added_at, INTERVAL 8 HOUR), last_reviewed_at = DATE_ADD(last_reviewed_at, INTERVAL 8 HOUR)`)
+	mustExec(`UPDATE word_dictionary SET first_seen_at = DATE_ADD(first_seen_at, INTERVAL 8 HOUR), last_updated_at = DATE_ADD(last_updated_at, INTERVAL 8 HOUR)`)
+	mustExec(`UPDATE users SET created_at = DATE_ADD(created_at, INTERVAL 8 HOUR)`)
+	mustExec(`UPDATE users SET last_login_at = DATE_ADD(last_login_at, INTERVAL 8 HOUR) WHERE last_login_at IS NOT NULL`)
+	mustExec(`UPDATE sessions SET created_at = DATE_ADD(created_at, INTERVAL 8 HOUR), expires_at = DATE_ADD(expires_at, INTERVAL 8 HOUR)`)
+
+	// 写入哨兵，防止重复执行
+	mustExec(`INSERT INTO settings (name, value) VALUES ('timestamps_migrated_to_cst', '1')`)
+
+	log.Println("时间戳迁移完成")
 }
 
 func mustExec(query string) {

@@ -2,11 +2,13 @@ services:
   mysql:
     image: mysql:8.0
     restart: unless-stopped
+    command: --default-time-zone=+08:00
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
       MYSQL_DATABASE: vocab
       MYSQL_USER: vocab
       MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      TZ: Asia/Shanghai
     volumes:
       - mysql_data:/var/lib/mysql
       - ./backend/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
