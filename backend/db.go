@@ -112,6 +112,7 @@ func migrateSchema() {
 	migrateWordsSenses()
 	migrateWordsUserIDColumn()
 	migrateWordsTranslatingColumn()
+	migrateWordsTranslationStartedColumn()
 	migrateWordsArchivedColumn()
 	migrateWordsUserArchivedIndex()
 	migrateUsersLastLoginColumn()
@@ -165,6 +166,15 @@ func migrateWordsTranslatingColumn() {
 		return
 	}
 	mustExec(`ALTER TABLE words ADD COLUMN translating TINYINT(1) NOT NULL DEFAULT 0`)
+}
+
+// migrateWordsTranslationStartedColumn 给 words 表补 translation_started_at 列，
+// 记录最近一轮查词任务的开始时间，用于周期性扫描那些 goroutine 异常退出后永久卡死的任务
+func migrateWordsTranslationStartedColumn() {
+	if columnExists("words", "translation_started_at") {
+		return
+	}
+	mustExec(`ALTER TABLE words ADD COLUMN translation_started_at DATETIME NULL`)
 }
 
 // migrateWordsArchivedColumn 给 words 表补 archived 列，标记单词是否已被用户归档

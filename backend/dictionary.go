@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/csv"
 	"encoding/json"
 	"log"
@@ -69,24 +70,65 @@ func formatSenses(senses []Sense) string {
 }
 
 // handleListDictionary 管理员查看全局词库：单词、释义、出现次数、最后更新时间。
-// 分页 + 关键字过滤都在数据库侧完成，前端只渲染当前页。
+// 分页 + 关键字过滤 + 释义状态过滤都在数据库侧完成，前端只渲染当前页。
+// status 取值：no_definition（暂无释义）/ has_definition（已有释义）/ 空（不过滤）。
 func (a *App) handleListDictionary(w http.ResponseWriter, r *http.Request) {
 	page, limit, offset := parsePagination(r)
 	keyword := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("keyword")))
+	status := r.URL.Query().Get("status")
 
-	total, err := a.dict.Count(r.Context(), keyword)
+	total, err := a.dict.Count(r.Context(), keyword, status)
 	if err != nil {
 		log.Printf("统计词库总数失败: %v", err)
 		writeError(w, http.StatusInternalServerError, "查询失败")
 		return
 	}
-	entries, err := a.dict.ListPage(r.Context(), keyword, limit, offset)
+	entries, err := a.dict.ListPage(r.Context(), keyword, status, limit, offset)
 	if err != nil {
 		log.Printf("查询词库失败: %v", err)
 		writeError(w, http.StatusInternalServerError, "查询失败")
 		return
 	}
 	writeJSON(w, http.StatusOK, newPageResult(entries, total, page, limit))
+}
+
+type retryDictionaryRequest struct {
+	WordKey string `json:"word_key"`
+}
+
+// handleRetryDictionary 管理员手动对词库里一条「暂无释义」的词条重新触发一次查词。
+// 同步执行：成功则把新释义写回词库缓存并返回，失败则返回明确错误、不改动原词条。
+// 只影响全局词库缓存表 word_dictionary，不触碰任何用户个人的 words 记录。
+func (a *App) handleRetryDictionary(w http.ResponseWriter, r *http.Request) {
+	var req retryDictionaryRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "请求格式不正确")
+		return
+	}
+	wordKey := strings.ToLower(strings.TrimSpace(req.WordKey))
+	if wordKey == "" {
+		writeError(w, http.StatusBadRequest, "单词不能为空")
+		return
+	}
+
+	// 先确认词条存在，避免对不存在的 key 白白调用一次模型
+	if _, err := a.dict.LookupSenses(r.Context(), wordKey); err == sql.ErrNoRows {
+		writeError(w, http.StatusNotFound, "词条不存在")
+		return
+	}
+
+	cfg := a.getDeepSeekConfig()
+	result := translateWord(r.Context(), wordKey, cfg)
+	merged := mergeSensesByPos(result.Senses)
+	if len(merged) == 0 {
+		writeError(w, http.StatusServiceUnavailable, "重新查询失败，请稍后重试")
+		return
+	}
+	a.saveDictionarySenses(r.Context(), wordKey, merged)
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"word_key": wordKey,
+		"senses":   merged,
+	})
 }
 
 // handleExportDictionary 管理员导出全局词库为 CSV，带 UTF-8 BOM 保证 Excel 打开中文不乱码

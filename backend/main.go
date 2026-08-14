@@ -35,10 +35,20 @@ func spaHandler(w http.ResponseWriter, r *http.Request) {
 var wordPattern = regexp.MustCompile(`^[A-Za-z][A-Za-z'\- ]{0,63}$`)
 
 const (
-	defaultRequestTimeout = 10 * time.Second
-	exportRequestTimeout  = 60 * time.Second
-	shutdownTimeout       = 15 * time.Second
-	bgTaskGracePeriod     = 10 * time.Second
+	defaultRequestTimeout  = 10 * time.Second
+	exportRequestTimeout   = 60 * time.Second
+	dictionaryRetryTimeout = 60 * time.Second
+	shutdownTimeout        = 15 * time.Second
+	bgTaskGracePeriod      = 10 * time.Second
+)
+
+const (
+	// stuckTranslationThreshold 判断一个查词任务是否已卡死的时长上界。收紧后的重试预算
+	// 约 82s（3 次尝试 × 每次 DeepSeek 20s + 在线兜底 5s，再加 2s/5s 两次重试等待），
+	// 超过这个阈值说明负责重试的 goroutine 已意外退出，可以安全地重新触发。
+	stuckTranslationThreshold = 90 * time.Second
+	// stuckSweepInterval 周期性扫描卡死任务的间隔。
+	stuckSweepInterval = 60 * time.Second
 )
 
 func main() {
@@ -53,6 +63,7 @@ func main() {
 	app.loadSettings()
 	app.resumeStuckTranslations()
 
+	go app.startStuckTranslationSweeper()
 	go app.loginLimiter.sweep(10*time.Minute, app.bgCtx.Done())
 	go app.pwLimiter.sweep(10*time.Minute, app.bgCtx.Done())
 
@@ -79,6 +90,7 @@ func main() {
 	mux.HandleFunc("GET /api/admin/dictionary/export", withTimeout(exportRequestTimeout)(app.requireAdmin(app.handleExportDictionary)))
 	mux.HandleFunc("DELETE /api/admin/dictionary/{word_key}", withTimeout(defaultRequestTimeout)(app.requireAdmin(app.handleDeleteDictionaryEntry)))
 	mux.HandleFunc("POST /api/admin/dictionary/batch-delete", withTimeout(defaultRequestTimeout)(app.requireAdmin(app.handleDeleteDictionaryBatch)))
+	mux.HandleFunc("POST /api/admin/dictionary/retry", withTimeout(dictionaryRetryTimeout)(app.requireAdmin(app.handleRetryDictionary)))
 
 	mux.HandleFunc("/", spaHandler)
 
@@ -200,8 +212,15 @@ func (a *App) handleAddWord(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, newWord)
 }
 
-// translateRetryDelays 查词失败时的重试间隔（指数退避），用完仍失败才彻底放弃
-var translateRetryDelays = []time.Duration{2 * time.Second, 4 * time.Second, 8 * time.Second, 16 * time.Second, 30 * time.Second}
+// translateRetryDelays 查词失败时的重试间隔，用完仍失败才彻底放弃。
+// 收紧到 2 次重试（首次 + 2 次 = 共 3 次尝试），缩短用户看到「查询中」的最长时间。
+var translateRetryDelays = []time.Duration{2 * time.Second, 5 * time.Second}
+
+// failedSenses 查词彻底失败后写入用户单词表的占位释义：明确告诉用户需要管理员介入，
+// 而不是留空让前端显示含糊的「暂无释义」或让单词永久停在「查询中」。
+// 注意：它只写回用户个人的 words.senses，绝不写进全局词库缓存 word_dictionary，
+// 否则同一个词会被其它用户命中缓存、永远锁死在错误提示上，无法再被正常重试。
+var failedSenses = []Sense{{Pos: "系统提示", Translation: "查询失败，请管理员重试"}}
 
 // spawnTranslation 以受信号量限流、可被进程关闭信号取消的方式启动后台查词任务；
 // 信号量获取是阻塞式的（不丢弃），避免单词永久卡在 translating=1 无法自愈。
@@ -241,9 +260,47 @@ func (a *App) resumeStuckTranslations() {
 	}
 }
 
+// startStuckTranslationSweeper 周期性扫描并重新触发长时间卡在 translating=1 的查词任务。
+// 正常情况下，重试预算耗尽后任务会写回失败占位提示并置 translating=0；但仍有一类罕见故障：
+// goroutine 在写最终结果这一步本身失败或异常退出，导致 translating 永远停在 1。这个周期扫描
+// 是唯一的自愈手段，否则这些单词会永久显示「查询中」直到下次进程重启。
+func (a *App) startStuckTranslationSweeper() {
+	ticker := time.NewTicker(stuckSweepInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			a.sweepStuckTranslations()
+		case <-a.bgCtx.Done():
+			return
+		}
+	}
+}
+
+// sweepStuckTranslations 单次扫描：只捞取 translating=1 且查词开始时间早于阈值的记录重新触发，
+// 正在合法重试中的任务开始时间刚被刷新过，不会误伤。
+func (a *App) sweepStuckTranslations() {
+	threshold := time.Now().Add(-stuckTranslationThreshold)
+	stuck, err := a.words.FindTranslatingStale(context.Background(), threshold)
+	if err != nil {
+		log.Printf("扫描卡死的查词任务失败: %v", err)
+		return
+	}
+	for _, wd := range stuck {
+		log.Printf("重新触发长时间卡死的查词任务 word=%s", wd.WordKey)
+		a.spawnTranslation(wd.ID, wd.WordKey)
+	}
+}
+
 // translateAndSave 在后台异步查词，查完再把释义写回数据库和全局词库缓存，不阻塞单词的录入请求；
 // 查词失败会按退避间隔重试，避免偶发失败导致释义永久空白；ctx 取消时（进程关闭）提前退出。
 func (a *App) translateAndSave(ctx context.Context, wordID int, wordKey string) {
+	// 标记本轮查词开始时间，供周期性扫描判断任务是否卡死。每次重新触发都会刷新，
+	// 避免把正在合法重试中的任务误判成卡死。
+	if err := a.words.MarkTranslationStarted(ctx, wordID, time.Now()); err != nil {
+		log.Printf("标记查词开始时间失败 word=%s id=%d: %v", wordKey, wordID, err)
+	}
+
 	for attempt := 0; ; attempt++ {
 		cfg := a.getDeepSeekConfig()
 		result := translateWord(ctx, wordKey, cfg)
@@ -255,7 +312,9 @@ func (a *App) translateAndSave(ctx context.Context, wordID int, wordKey string) 
 		}
 		if attempt >= len(translateRetryDelays) {
 			log.Printf("查词多次重试后仍失败，放弃 word=%s", wordKey)
-			a.saveWordSenses(ctx, wordID, wordKey, []Sense{})
+			// 写入失败占位提示而非空释义，让用户和管理员都能明确看到「查询失败」。
+			// 只写用户自己的 words，不写全局词库缓存，避免污染后续命中缓存的其它用户。
+			a.saveWordSenses(ctx, wordID, wordKey, failedSenses)
 			return
 		}
 		delay := translateRetryDelays[attempt]

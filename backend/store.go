@@ -276,9 +276,40 @@ func (r *wordRepo) UpdateSenses(ctx context.Context, id int, sensesJSON []byte) 
 	return err
 }
 
+// MarkTranslationStarted 记录一轮查词任务的开始时间，供周期性扫描判断任务是否卡死。
+// 每次重新触发查词都会刷新这个时间戳，避免把正在合法重试中的任务误判成卡死。
+func (r *wordRepo) MarkTranslationStarted(ctx context.Context, id int, now time.Time) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE words SET translation_started_at = ? WHERE id = ?`, now, id)
+	return err
+}
+
 // FindTranslating 返回所有 translating=1 的记录（进程重启前未完成的查词任务）
 func (r *wordRepo) FindTranslating(ctx context.Context) ([]Word, error) {
 	rows, err := r.db.QueryContext(ctx, `SELECT id, word_key FROM words WHERE translating = 1`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	list := []Word{}
+	for rows.Next() {
+		var wd Word
+		if err := rows.Scan(&wd.ID, &wd.WordKey); err != nil {
+			return nil, err
+		}
+		list = append(list, wd)
+	}
+	return list, rows.Err()
+}
+
+// FindTranslatingStale 返回 translating=1 且查词开始时间早于阈值（或从未标记开始时间）的记录，
+// 用于周期性扫描那些 goroutine 在写回结果前意外退出、永久卡死在“查询中”的任务。
+// 正在合法重试中的任务开始时间刚被刷新过，不会落入这里。
+func (r *wordRepo) FindTranslatingStale(ctx context.Context, threshold time.Time) ([]Word, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT id, word_key FROM words WHERE translating = 1 AND (translation_started_at IS NULL OR translation_started_at < ?)`,
+		threshold,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -451,51 +482,51 @@ func (r *dictionaryRepo) List(ctx context.Context) ([]dictionaryEntry, error) {
 	return scanDictRows(rows)
 }
 
-// ListPage 取一页词库记录。keyword 非空时同时匹配单词和释义（释义通过 JSON_SEARCH
-// 在 senses JSON 数组里查找），过滤下沉到数据库，前端不再本地过滤。
-func (r *dictionaryRepo) ListPage(ctx context.Context, keyword string, limit, offset int) ([]dictionaryEntry, error) {
-	var (
-		rows *sql.Rows
-		err  error
-	)
-	if keyword == "" {
-		rows, err = r.db.QueryContext(ctx,
-			`SELECT `+dictColumns+` FROM word_dictionary
-			 ORDER BY last_updated_at DESC, word_key ASC LIMIT ? OFFSET ?`,
-			limit, offset,
-		)
-	} else {
-		like := likeContains(keyword)
+// dictFilterWhere 根据关键词和释义状态拼出 WHERE 子句（不含 WHERE 关键字）及对应参数。
+// keyword、status 都为空时返回空子句和空参数，表示不过滤。status 取值：
+// "no_definition"（暂无释义）/ "has_definition"（已有释义）/ 其它或空（不过滤）。
+func dictFilterWhere(keyword, status string) (string, []interface{}) {
+	conds := []string{}
+	args := []interface{}{}
+	if keyword != "" {
 		// JSON_SEARCH 第二个参数 'one' 表示匹配到一条即可；senses 数组里的对象形如
 		// {"pos":"n.","translation":"名词"}，'$.translation' 指只对 translation 字段做匹配。
-		rows, err = r.db.QueryContext(ctx,
-			`SELECT `+dictColumns+` FROM word_dictionary
-			 WHERE word_key LIKE ? OR JSON_SEARCH(senses, 'one', ?, NULL, '$.translation') IS NOT NULL
-			 ORDER BY last_updated_at DESC, word_key ASC LIMIT ? OFFSET ?`,
-			like, like, limit, offset,
-		)
+		like := likeContains(keyword)
+		conds = append(conds, `(word_key LIKE ? OR JSON_SEARCH(senses, 'one', ?, NULL, '$.translation') IS NOT NULL)`)
+		args = append(args, like, like)
 	}
+	switch status {
+	case "no_definition":
+		conds = append(conds, `(senses IS NULL OR JSON_LENGTH(senses) = 0)`)
+	case "has_definition":
+		conds = append(conds, `(senses IS NOT NULL AND JSON_LENGTH(senses) > 0)`)
+	}
+	if len(conds) == 0 {
+		return "", nil
+	}
+	return " WHERE " + strings.Join(conds, " AND "), args
+}
+
+// ListPage 取一页词库记录。keyword 非空时同时匹配单词和释义（释义通过 JSON_SEARCH
+// 在 senses JSON 数组里查找），status 按释义有无过滤；两者都下沉到数据库，前端不再本地过滤。
+func (r *dictionaryRepo) ListPage(ctx context.Context, keyword, status string, limit, offset int) ([]dictionaryEntry, error) {
+	where, args := dictFilterWhere(keyword, status)
+	args = append(args, limit, offset)
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT `+dictColumns+` FROM word_dictionary`+where+
+			` ORDER BY last_updated_at DESC, word_key ASC LIMIT ? OFFSET ?`,
+		args...,
+	)
 	if err != nil {
 		return nil, err
 	}
 	return scanDictRows(rows)
 }
 
-func (r *dictionaryRepo) Count(ctx context.Context, keyword string) (int, error) {
+func (r *dictionaryRepo) Count(ctx context.Context, keyword, status string) (int, error) {
+	where, args := dictFilterWhere(keyword, status)
 	var count int
-	var err error
-	if keyword == "" {
-		err = r.db.QueryRowContext(ctx,
-			`SELECT COUNT(*) FROM word_dictionary`,
-		).Scan(&count)
-	} else {
-		like := likeContains(keyword)
-		err = r.db.QueryRowContext(ctx,
-			`SELECT COUNT(*) FROM word_dictionary
-			 WHERE word_key LIKE ? OR JSON_SEARCH(senses, 'one', ?, NULL, '$.translation') IS NOT NULL`,
-			like, like,
-		).Scan(&count)
-	}
+	err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM word_dictionary`+where, args...).Scan(&count)
 	return count, err
 }
 

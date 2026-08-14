@@ -44,7 +44,9 @@ type wordStore interface {
 	Delete(ctx context.Context, id, userID int) (int64, error)
 	SetArchived(ctx context.Context, id, userID int, archived bool) (int64, error)
 	UpdateSenses(ctx context.Context, id int, sensesJSON []byte) error
+	MarkTranslationStarted(ctx context.Context, id int, now time.Time) error
 	FindTranslating(ctx context.Context) ([]Word, error)
+	FindTranslatingStale(ctx context.Context, threshold time.Time) ([]Word, error)
 	FindTranslatingByUser(ctx context.Context, userID int) ([]Word, error)
 	FindByIDs(ctx context.Context, userID int, ids []int) ([]Word, error)
 	Stats(ctx context.Context, userID int, since, todaySince, todayUntil time.Time) (WordStats, error)
@@ -55,8 +57,8 @@ type dictionaryStore interface {
 	LookupSenses(ctx context.Context, wordKey string) ([]byte, error)
 	SaveSenses(ctx context.Context, wordKey string, sensesJSON []byte) error
 	List(ctx context.Context) ([]dictionaryEntry, error)
-	ListPage(ctx context.Context, keyword string, limit, offset int) ([]dictionaryEntry, error)
-	Count(ctx context.Context, keyword string) (int, error)
+	ListPage(ctx context.Context, keyword, status string, limit, offset int) ([]dictionaryEntry, error)
+	Count(ctx context.Context, keyword, status string) (int, error)
 	Delete(ctx context.Context, wordKey string) error
 	DeleteMany(ctx context.Context, wordKeys []string) (int64, error)
 }
