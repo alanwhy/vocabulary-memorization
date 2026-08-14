@@ -180,7 +180,7 @@ onMounted(() => {
         @load-more="loadMore"
       />
     </div>
-    <div class="footer">v1.8.1</div>
+    <div class="footer">v1.9.0</div>
   </div>
 </template>
 
