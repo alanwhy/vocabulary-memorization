@@ -73,9 +73,11 @@ type UserWithStats struct {
 type pageResult struct {
 	Items   interface{} `json:"items"`
 	Total   int         `json:"total"`
-	Page    int         `json:"page"`
-	Limit   int         `json:"limit"`
-	HasMore bool        `json:"has_more"`
+	// TotalAll 不受筛选影响的整表总数（仅词库管理接口填充），用于顶部展示全库单词数。
+	TotalAll int  `json:"total_all,omitempty"`
+	Page     int  `json:"page"`
+	Limit    int  `json:"limit"`
+	HasMore  bool `json:"has_more"`
 }
 
 func newPageResult(items interface{}, total, page, limit int) pageResult {
@@ -94,15 +96,29 @@ type dailyCount struct {
 	Count int    `json:"count"`
 }
 
+// wordCloudItem 词云里的一条：Word 为展示拼写，Count 为累计背诵次数（权重）
+type wordCloudItem struct {
+	Word  string `json:"word"`
+	Count int    `json:"count"`
+}
+
+// letterStat 按开头字母分组的一条统计
+type letterStat struct {
+	Letter string `json:"letter"`
+	Count  int    `json:"count"`
+}
+
 // WordStats 统计页需要的全部聚合数值。列表分页后前端拿不到全量数据，这些改由后端用 SQL 聚合算出。
 // 除 TotalAllWords / ArchivedWords 外，其余字段都只统计未归档的单词，保持统计页原有口径。
 type WordStats struct {
-	TotalWords       int          `json:"total_words"`
-	ArchivedWords    int          `json:"archived_words"`
-	TotalAllWords    int          `json:"total_all_words"`
-	TotalReviews     int          `json:"total_reviews"`
-	TodayReviews     int          `json:"today_reviews"`
-	TranslatingCount int          `json:"translating_count"`
-	ReviewBuckets    []int        `json:"review_buckets"`
-	DailyAdditions   []dailyCount `json:"daily_additions"`
+	TotalWords       int             `json:"total_words"`
+	ArchivedWords    int             `json:"archived_words"`
+	TotalAllWords    int             `json:"total_all_words"`
+	TotalReviews     int             `json:"total_reviews"`
+	TodayReviews     int             `json:"today_reviews"`
+	TranslatingCount int             `json:"translating_count"`
+	ReviewBuckets    []int           `json:"review_buckets"`
+	DailyAdditions   []dailyCount    `json:"daily_additions"`
+	WordCloud        []wordCloudItem `json:"word_cloud"`
+	LetterStats      []letterStat    `json:"letter_stats"`
 }

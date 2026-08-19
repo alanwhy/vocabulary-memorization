@@ -362,7 +362,7 @@ func (r *wordRepo) FindByIDs(ctx context.Context, userID int, ids []int) ([]Word
 // SUM 在 0 行时返回 NULL，所以统一套 COALESCE 兜成 0。since 为本地时区的起始时间。
 // todaySince / todayUntil 划定今日背诵次数的统计窗口：[00:00:00, 23:59:59.999...)，
 // 对窗口内被复习过的每个单词计数 1（不累计历史 review_count），避免把历史背诵次数也加进来。
-func (r *wordRepo) Stats(ctx context.Context, userID int, since, todaySince, todayUntil time.Time) (WordStats, error) {
+func (r *wordRepo) Stats(ctx context.Context, userID int, since, since7, todaySince, todayUntil time.Time) (WordStats, error) {
 	var s WordStats
 
 	err := r.db.QueryRowContext(ctx,
@@ -416,6 +416,54 @@ func (r *wordRepo) Stats(ctx context.Context, userID int, since, todaySince, tod
 		s.DailyAdditions = append(s.DailyAdditions, d)
 	}
 	if err := rows.Err(); err != nil {
+		return WordStats{}, err
+	}
+
+	// 词云：近 7 天复习过的单词，权重用累计背诵次数，按次数降序取前 50 个避免词云过密
+	cloudRows, err := r.db.QueryContext(ctx,
+		`SELECT display_word, review_count FROM words
+		 WHERE user_id = ? AND archived = 0 AND last_reviewed_at >= ?
+		 ORDER BY review_count DESC, display_word ASC LIMIT 50`,
+		userID, since7,
+	)
+	if err != nil {
+		return WordStats{}, err
+	}
+	defer cloudRows.Close()
+
+	s.WordCloud = []wordCloudItem{}
+	for cloudRows.Next() {
+		var it wordCloudItem
+		if err := cloudRows.Scan(&it.Word, &it.Count); err != nil {
+			return WordStats{}, err
+		}
+		s.WordCloud = append(s.WordCloud, it)
+	}
+	if err := cloudRows.Err(); err != nil {
+		return WordStats{}, err
+	}
+
+	// 开头字母统计：按展示拼写的首字母（大写归一）分组计数
+	letterRows, err := r.db.QueryContext(ctx,
+		`SELECT UPPER(LEFT(display_word, 1)) l, COUNT(*) c FROM words
+		 WHERE user_id = ? AND archived = 0
+		 GROUP BY l ORDER BY l`,
+		userID,
+	)
+	if err != nil {
+		return WordStats{}, err
+	}
+	defer letterRows.Close()
+
+	s.LetterStats = []letterStat{}
+	for letterRows.Next() {
+		var ls letterStat
+		if err := letterRows.Scan(&ls.Letter, &ls.Count); err != nil {
+			return WordStats{}, err
+		}
+		s.LetterStats = append(s.LetterStats, ls)
+	}
+	if err := letterRows.Err(); err != nil {
 		return WordStats{}, err
 	}
 	return s, nil

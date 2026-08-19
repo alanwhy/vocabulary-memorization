@@ -40,18 +40,17 @@ export function useWordStats(stats) {
     return days
   })
 
-  const maxDailyCount = computed(() => Math.max(1, ...dailyTrend.value.map((d) => d.count)))
-
   const reviewBuckets = computed(() =>
     BUCKET_LABELS.map((label, idx) => ({ label, count: stats.value.review_buckets?.[idx] || 0 })),
   )
 
-  const maxBucketCount = computed(() => Math.max(1, ...reviewBuckets.value.map((b) => b.count)))
+  // 词云数据：echarts-wordcloud 需要 { name, value } 形状
+  const wordCloudData = computed(() =>
+    (stats.value.word_cloud || []).map((it) => ({ name: it.word, value: it.count })),
+  )
 
-  function barHeight(count, max) {
-    const pct = max > 0 ? (count / max) * 100 : 0
-    return `${Math.max(pct, count > 0 ? 4 : 0)}%`
-  }
+  // 开头字母统计：后端已按字母排序，直接给 echarts 柱状图用
+  const letterStatsData = computed(() => stats.value.letter_stats || [])
 
-  return { avgReviews, dailyTrend, maxDailyCount, reviewBuckets, maxBucketCount, barHeight }
+  return { avgReviews, dailyTrend, reviewBuckets, wordCloudData, letterStatsData }
 }

@@ -7,6 +7,8 @@ export const PAGE_SIZE = 100
 export function usePaginatedList(fetchPage, { pageSize = PAGE_SIZE } = {}) {
   const items = ref([])
   const total = ref(0)
+  // totalAll 为不受筛选影响的整表总数（仅部分接口返回），用于顶部展示全量计数
+  const totalAll = ref(0)
   const loading = ref(false)
   const hasMore = ref(true)
   const loaded = ref(false) // 是否已经成功加载过第一页，用于区分「还没加载」和「确实是空列表」
@@ -29,6 +31,7 @@ export function usePaginatedList(fetchPage, { pageSize = PAGE_SIZE } = {}) {
       page = nextPage
       items.value = nextPage === 1 ? data.items : items.value.concat(data.items)
       total.value = data.total
+      totalAll.value = data.total_all ?? 0
       hasMore.value = data.has_more
       loaded.value = true
     } catch (e) {
@@ -45,6 +48,7 @@ export function usePaginatedList(fetchPage, { pageSize = PAGE_SIZE } = {}) {
     page = 0
     items.value = []
     total.value = 0
+    totalAll.value = 0
     hasMore.value = true
     loaded.value = false
     loading.value = false
@@ -60,5 +64,5 @@ export function usePaginatedList(fetchPage, { pageSize = PAGE_SIZE } = {}) {
     }
   }
 
-  return { items, total, loading, hasMore, loaded, errorMsg, reset, loadMore, removeItem }
+  return { items, total, totalAll, loading, hasMore, loaded, errorMsg, reset, loadMore, removeItem }
 }

@@ -18,7 +18,7 @@ const list = usePaginatedList((page, limit) =>
     `/api/admin/dictionary?keyword=${encodeURIComponent(dictFilter.value.trim())}&status=${encodeURIComponent(statusFilter.value)}&page=${page}&limit=${limit}`,
   ),
 )
-const { items: dictEntries, total, loading, hasMore, loaded, errorMsg, reset, loadMore } = list
+const { items: dictEntries, total, totalAll, loading, hasMore, loaded, errorMsg, reset, loadMore } = list
 
 const sentinelRef = ref(null)
 useInfiniteScroll(sentinelRef, loadMore)
@@ -130,7 +130,7 @@ onMounted(reset)
 </script>
 
 <template>
-  <h2>词库管理</h2>
+  <h2>词库管理 <span class="total-count">共 {{ totalAll }} 个单词</span></h2>
   <div class="card">
     <div class="toolbar">
       <a class="export-btn" href="/api/admin/dictionary/export">导出 CSV</a>
@@ -203,6 +203,12 @@ onMounted(reset)
 </template>
 
 <style scoped>
+.total-count {
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--muted);
+  margin-left: 8px;
+}
 .toolbar {
   display: flex;
   gap: 8px;

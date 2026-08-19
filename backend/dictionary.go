@@ -89,7 +89,14 @@ func (a *App) handleListDictionary(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "查询失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, newPageResult(entries, total, page, limit))
+	result := newPageResult(entries, total, page, limit)
+	// 顶部总数展示全库单词数，不受当前关键字/状态筛选影响；空筛选下 total 即全库数，无需再查一次。
+	if keyword == "" && status == "" {
+		result.TotalAll = total
+	} else if totalAll, err := a.dict.Count(r.Context(), "", ""); err == nil {
+		result.TotalAll = totalAll
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 type retryDictionaryRequest struct {

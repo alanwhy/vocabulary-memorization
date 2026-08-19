@@ -37,7 +37,7 @@ func lookupDeepSeek(ctx context.Context, word string, cfg deepseekConfig) ([]Sen
 	if !cfg.Enabled {
 		return nil, fmt.Errorf("deepseek 未启用")
 	}
-	if cfg.APIKey == "" || cfg.BaseURL == "" || cfg.Model == "" {
+	if cfg.APIKey == "" || cfg.BaseURL == "" || cfg.FallbackModel == "" {
 		return nil, fmt.Errorf("deepseek 配置不完整")
 	}
 
@@ -47,7 +47,7 @@ func lookupDeepSeek(ctx context.Context, word string, cfg deepseekConfig) ([]Sen
 每个词性只返回一条：同一词性如果有多个常见释义，合并成一条，用中文分号"；"分隔；不同词性分别返回不同的一条，不要合并到一起。`, word)
 
 	reqBody := deepseekChatRequest{
-		Model:       cfg.Model,
+		Model:       cfg.FallbackModel,
 		Messages:    []deepseekMessage{{Role: "user", Content: prompt}},
 		Temperature: 0,
 	}

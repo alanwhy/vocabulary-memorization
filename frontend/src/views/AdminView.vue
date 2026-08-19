@@ -111,13 +111,12 @@ th {
 }
 .export-btn {
   display: inline-block;
-  margin-bottom: 12px;
   font-size: 13px;
   color: var(--accent);
   text-decoration: none;
   border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 5px 10px;
+  border-radius: 8px;
+  padding: 8px 14px;
 }
 .export-btn:hover {
   border-color: var(--accent);

@@ -470,8 +470,10 @@ func (a *App) handleWordStats(w http.ResponseWriter, r *http.Request) {
 	midnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 	tomorrowMidnight := midnight.AddDate(0, 0, 1)
 	since := midnight.AddDate(0, 0, -(statsTrendDays - 1))
+	// since7 划定词云的「近 7 天」窗口（含今天，共 7 天）
+	since7 := midnight.AddDate(0, 0, -6)
 
-	stats, err := a.words.Stats(r.Context(), user.ID, since, midnight, tomorrowMidnight)
+	stats, err := a.words.Stats(r.Context(), user.ID, since, since7, midnight, tomorrowMidnight)
 	if err != nil {
 		log.Printf("查询统计数据失败: %v", err)
 		writeError(w, http.StatusInternalServerError, "查询失败")

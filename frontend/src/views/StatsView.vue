@@ -1,7 +1,8 @@
 <script setup>
-import { onMounted, ref } from 'vue'
+import { nextTick, onMounted, ref } from 'vue'
 import { apiGet } from '@/api/client'
 import { useWordStats } from '@/composables/useWordStats'
+import { useEcharts, cssVar } from '@/composables/useEcharts'
 
 const stats = ref({
   total_words: 0,
@@ -9,17 +10,113 @@ const stats = ref({
   translating_count: 0,
   review_buckets: [],
   daily_additions: [],
+  word_cloud: [],
+  letter_stats: [],
 })
 const loaded = ref(false)
 const errorMsg = ref('')
 
-const { avgReviews, dailyTrend, maxDailyCount, reviewBuckets, maxBucketCount, barHeight } =
-  useWordStats(stats)
+const { avgReviews, dailyTrend, reviewBuckets, wordCloudData, letterStatsData } = useWordStats(stats)
+
+const trendRef = ref(null)
+const distRef = ref(null)
+const cloudRef = ref(null)
+const letterRef = ref(null)
+
+const trendChart = useEcharts(trendRef)
+const distChart = useEcharts(distRef)
+const cloudChart = useEcharts(cloudRef)
+const letterChart = useEcharts(letterRef)
+
+// 四张图统一配色：主色用界面 accent，坐标轴文字用 muted；数据都来自 stats 的后端聚合
+function renderCharts() {
+  const accent = cssVar('--accent', '#4f8cff')
+  const muted = cssVar('--muted', '#9aa0a6')
+  const splitLine = { lineStyle: { color: 'rgba(128,128,128,0.15)' } }
+  const axisLine = { lineStyle: { color: muted } }
+
+  trendChart.setOption({
+    grid: { left: 40, right: 12, top: 24, bottom: 28 },
+    tooltip: { trigger: 'axis' },
+    xAxis: {
+      type: 'category',
+      data: dailyTrend.value.map((d) => d.label),
+      axisLabel: { color: muted },
+      axisLine,
+    },
+    yAxis: { type: 'value', minInterval: 1, axisLabel: { color: muted }, splitLine },
+    series: [
+      {
+        type: 'bar',
+        data: dailyTrend.value.map((d) => d.count),
+        barMaxWidth: 22,
+        itemStyle: { color: accent, borderRadius: [3, 3, 0, 0] },
+      },
+    ],
+  })
+
+  distChart.setOption({
+    grid: { left: 56, right: 32, top: 12, bottom: 20 },
+    tooltip: { trigger: 'axis' },
+    xAxis: { type: 'value', minInterval: 1, axisLabel: { color: muted }, splitLine },
+    yAxis: {
+      type: 'category',
+      data: reviewBuckets.value.map((b) => b.label),
+      axisLabel: { color: muted },
+      axisLine,
+    },
+    series: [
+      {
+        type: 'bar',
+        data: reviewBuckets.value.map((b) => b.count),
+        barMaxWidth: 18,
+        itemStyle: { color: accent, borderRadius: [0, 3, 3, 0] },
+      },
+    ],
+  })
+
+  cloudChart.setOption({
+    tooltip: {},
+    series: [
+      {
+        type: 'wordCloud',
+        shape: 'circle',
+        sizeRange: [12, 44],
+        rotationRange: [0, 0],
+        gridSize: 6,
+        textStyle: { color: accent, fontFamily: 'sans-serif' },
+        data: wordCloudData.value,
+      },
+    ],
+  })
+
+  letterChart.setOption({
+    grid: { left: 40, right: 12, top: 24, bottom: 28 },
+    tooltip: { trigger: 'axis' },
+    xAxis: {
+      type: 'category',
+      data: letterStatsData.value.map((d) => d.letter),
+      axisLabel: { color: muted },
+      axisLine,
+    },
+    yAxis: { type: 'value', minInterval: 1, axisLabel: { color: muted }, splitLine },
+    series: [
+      {
+        type: 'bar',
+        data: letterStatsData.value.map((d) => d.count),
+        barMaxWidth: 22,
+        itemStyle: { color: accent, borderRadius: [3, 3, 0, 0] },
+      },
+    ],
+  })
+}
 
 onMounted(async () => {
   try {
     stats.value = await apiGet('/api/stats')
     loaded.value = true
+    await nextTick()
+    renderCharts()
   } catch {
     errorMsg.value = '统计数据加载失败，请刷新重试'
   }
@@ -51,27 +148,16 @@ onMounted(async () => {
       </div>
 
       <h2>最近 14 天新增趋势</h2>
-      <div class="card">
-        <div class="bar-chart">
-          <div class="bar-col" v-for="d in dailyTrend" :key="d.date">
-            <span class="bar-value">{{ d.count || '' }}</span>
-            <div class="bar" :style="{ height: barHeight(d.count, maxDailyCount) }"></div>
-            <span class="bar-label">{{ d.label }}</span>
-          </div>
-        </div>
-      </div>
+      <div class="card"><div ref="trendRef" class="chart"></div></div>
 
       <h2>背诵次数分布</h2>
-      <div class="card dist-chart">
-        <div class="dist-row" v-for="b in reviewBuckets" :key="b.label">
-          <span class="dist-label">{{ b.label }}</span>
-          <div class="dist-bar-wrap">
-            <div class="dist-bar" :style="{ width: barHeight(b.count, maxBucketCount) }"></div>
-          </div>
-          <span class="dist-count">{{ b.count }}</span>
-        </div>
-      </div>
+      <div class="card"><div ref="distRef" class="chart chart-dist"></div></div>
 
+      <h2>近 7 天词云</h2>
+      <div class="card"><div ref="cloudRef" class="chart chart-cloud"></div></div>
+
+      <h2>开头字母统计</h2>
+      <div class="card"><div ref="letterRef" class="chart"></div></div>
     </template>
 
     <div class="empty" v-else-if="errorMsg">{{ errorMsg }}</div>
@@ -111,76 +197,15 @@ onMounted(async () => {
   color: var(--muted);
   margin-top: 4px;
 }
-.bar-chart {
-  display: flex;
-  align-items: flex-end;
-  gap: 4px;
-  height: 120px;
-}
-.bar-col {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  height: 100%;
-  justify-content: flex-end;
-  gap: 4px;
-  min-width: 0;
-}
-.bar-col .bar-value {
-  font-size: 11px;
-  color: var(--muted);
-}
-.bar-col .bar {
+.chart {
   width: 100%;
-  max-width: 22px;
-  background: var(--accent);
-  border-radius: 3px 3px 0 0;
-  min-height: 2px;
+  height: 220px;
 }
-.bar-col .bar-label {
-  font-size: 10px;
-  color: var(--muted);
-  white-space: nowrap;
-  transform: rotate(-40deg);
-  transform-origin: top center;
-  margin-top: 6px;
+.chart-dist {
+  height: 160px;
 }
-.dist-chart {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-.dist-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-.dist-row .dist-label {
-  font-size: 13px;
-  color: var(--muted);
-  width: 72px;
-  flex-shrink: 0;
-}
-.dist-row .dist-bar-wrap {
-  flex: 1;
-  background: var(--accent-soft);
-  border-radius: 6px;
-  overflow: hidden;
-  height: 18px;
-}
-.dist-row .dist-bar {
-  height: 100%;
-  background: var(--accent);
-  border-radius: 6px;
-  min-width: 2px;
-}
-.dist-row .dist-count {
-  font-size: 13px;
-  font-weight: 600;
-  width: 32px;
-  text-align: right;
-  flex-shrink: 0;
+.chart-cloud {
+  height: 320px;
 }
 @media (max-width: 480px) {
   .overview {

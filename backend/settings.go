@@ -8,19 +8,25 @@ import (
 	"strings"
 )
 
-// deepseekConfig DeepSeek 查词的配置，可在后台动态修改
+// deepseekConfig DeepSeek 查词的配置，可在后台动态修改。
+// FallbackModel 是当前实际用于查词的模型；ThinkingModel 本期仅做配置存储，尚未接入查词链路。
 type deepseekConfig struct {
-	APIKey  string `json:"api_key"`
-	BaseURL string `json:"base_url"`
-	Model   string `json:"model"`
-	Enabled bool   `json:"enabled"`
+	APIKey        string `json:"api_key"`
+	BaseURL       string `json:"base_url"`
+	FallbackModel string `json:"fallback_model"`
+	ThinkingModel string `json:"thinking_model"`
+	Enabled       bool   `json:"enabled"`
 }
 
 const (
-	settingKeyAPIKey  = "deepseek_api_key"
-	settingKeyBaseURL = "deepseek_base_url"
-	settingKeyModel   = "deepseek_model"
-	settingKeyEnabled = "deepseek_enabled"
+	settingKeyAPIKey        = "deepseek_api_key"
+	settingKeyBaseURL       = "deepseek_base_url"
+	settingKeyFallbackModel = "deepseek_fallback_model"
+	settingKeyThinkingModel = "deepseek_thinking_model"
+	settingKeyEnabled       = "deepseek_enabled"
+
+	// legacySettingKeyModel 旧版单一「模型」配置 key，仅用于启动时迁移到兜底模型，之后不再读写。
+	legacySettingKeyModel = "deepseek_model"
 )
 
 // loadSettings 启动时调用：如果 settings 表里还没有 DeepSeek 配置，用环境变量（或内置默认值）种一份进去，
@@ -29,8 +35,17 @@ func (a *App) loadSettings() {
 	ctx := context.Background()
 	a.seedSettingIfMissing(ctx, settingKeyAPIKey, getEnv("DEEPSEEK_API_KEY", ""))
 	a.seedSettingIfMissing(ctx, settingKeyBaseURL, getEnv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"))
-	a.seedSettingIfMissing(ctx, settingKeyModel, getEnv("DEEPSEEK_MODEL", "deepseek-v4-flash"))
 	a.seedSettingIfMissing(ctx, settingKeyEnabled, "true")
+
+	// 兜底模型播种优先级：旧 deepseek_model（迁移，避免覆盖已自定义的值）> DEEPSEEK_FALLBACK_MODEL > 内置默认值。
+	fallbackDefault := getEnv("DEEPSEEK_FALLBACK_MODEL", "deepseek-v4-flash")
+	if existing, err := a.settings.LoadValues(ctx, []string{legacySettingKeyModel, settingKeyFallbackModel}); err == nil {
+		if existing[settingKeyFallbackModel] == "" && existing[legacySettingKeyModel] != "" {
+			fallbackDefault = existing[legacySettingKeyModel]
+		}
+	}
+	a.seedSettingIfMissing(ctx, settingKeyFallbackModel, fallbackDefault)
+	a.seedSettingIfMissing(ctx, settingKeyThinkingModel, getEnv("DEEPSEEK_THINKING_MODEL", ""))
 	a.refreshSettingsCache(ctx)
 }
 
@@ -41,17 +56,20 @@ func (a *App) seedSettingIfMissing(ctx context.Context, name, value string) {
 }
 
 func (a *App) refreshSettingsCache(ctx context.Context) {
-	values, err := a.settings.LoadValues(ctx, []string{settingKeyAPIKey, settingKeyBaseURL, settingKeyModel, settingKeyEnabled})
+	values, err := a.settings.LoadValues(ctx, []string{
+		settingKeyAPIKey, settingKeyBaseURL, settingKeyFallbackModel, settingKeyThinkingModel, settingKeyEnabled,
+	})
 	if err != nil {
 		log.Fatalf("加载配置失败: %v", err)
 	}
 
 	a.settingsMu.Lock()
 	a.dsConfig = deepseekConfig{
-		APIKey:  values[settingKeyAPIKey],
-		BaseURL: strings.TrimRight(values[settingKeyBaseURL], "/"),
-		Model:   values[settingKeyModel],
-		Enabled: values[settingKeyEnabled] == "true",
+		APIKey:        values[settingKeyAPIKey],
+		BaseURL:       strings.TrimRight(values[settingKeyBaseURL], "/"),
+		FallbackModel: values[settingKeyFallbackModel],
+		ThinkingModel: values[settingKeyThinkingModel],
+		Enabled:       values[settingKeyEnabled] == "true",
 	}
 	a.settingsMu.Unlock()
 }
@@ -76,10 +94,11 @@ func (a *App) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 type updateSettingsRequest struct {
-	APIKey  string `json:"api_key"`
-	BaseURL string `json:"base_url"`
-	Model   string `json:"model"`
-	Enabled bool   `json:"enabled"`
+	APIKey        string `json:"api_key"`
+	BaseURL       string `json:"base_url"`
+	FallbackModel string `json:"fallback_model"`
+	ThinkingModel string `json:"thinking_model"`
+	Enabled       bool   `json:"enabled"`
 }
 
 func (a *App) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
@@ -89,9 +108,10 @@ func (a *App) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.BaseURL = strings.TrimSpace(req.BaseURL)
-	req.Model = strings.TrimSpace(req.Model)
-	if req.BaseURL == "" || req.Model == "" {
-		writeError(w, http.StatusBadRequest, "base_url 和 model 不能为空")
+	req.FallbackModel = strings.TrimSpace(req.FallbackModel)
+	req.ThinkingModel = strings.TrimSpace(req.ThinkingModel)
+	if req.BaseURL == "" || req.FallbackModel == "" {
+		writeError(w, http.StatusBadRequest, "base_url 和兜底模型不能为空")
 		return
 	}
 
@@ -108,10 +128,11 @@ func (a *App) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	updates := map[string]string{
-		settingKeyAPIKey:  apiKey,
-		settingKeyBaseURL: req.BaseURL,
-		settingKeyModel:   req.Model,
-		settingKeyEnabled: enabledStr,
+		settingKeyAPIKey:        apiKey,
+		settingKeyBaseURL:       req.BaseURL,
+		settingKeyFallbackModel: req.FallbackModel,
+		settingKeyThinkingModel: req.ThinkingModel,
+		settingKeyEnabled:       enabledStr,
 	}
 	if err := a.settings.UpsertMany(r.Context(), updates); err != nil {
 		log.Printf("更新配置失败: %v", err)

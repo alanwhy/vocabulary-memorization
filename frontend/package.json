@@ -12,6 +12,8 @@
     "lint:eslint": "eslint . --fix --cache"
   },
   "dependencies": {
+    "echarts": "^5.6.0",
+    "echarts-wordcloud": "^2.1.0",
     "element-plus": "^2.14.3",
     "pinia": "^4.0.2",
     "vue": "^3.5.40",
