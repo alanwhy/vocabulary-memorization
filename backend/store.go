@@ -198,8 +198,14 @@ func wordOrderBy(sort string) string {
 	switch sort {
 	case "time":
 		return `last_reviewed_at DESC, id DESC`
+	case "time_asc":
+		return `last_reviewed_at ASC, id ASC`
 	case "alpha":
 		return `word_key ASC, id ASC`
+	case "alpha_desc":
+		return `word_key DESC, id DESC`
+	case "count_asc":
+		return `review_count ASC, last_reviewed_at ASC, id ASC`
 	default: // count：默认按背诵次数倒序
 		return `review_count DESC, last_reviewed_at DESC, id DESC`
 	}

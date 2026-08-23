@@ -9,9 +9,12 @@ import (
 
 func TestWordOrderByWhitelist(t *testing.T) {
 	cases := map[string]string{
-		"time":  `last_reviewed_at DESC, id DESC`,
-		"alpha": `word_key ASC, id ASC`,
-		"count": `review_count DESC, last_reviewed_at DESC, id DESC`,
+		"time":       `last_reviewed_at DESC, id DESC`,
+		"time_asc":   `last_reviewed_at ASC, id ASC`,
+		"alpha":      `word_key ASC, id ASC`,
+		"alpha_desc": `word_key DESC, id DESC`,
+		"count":      `review_count DESC, last_reviewed_at DESC, id DESC`,
+		"count_asc":  `review_count ASC, last_reviewed_at ASC, id ASC`,
 	}
 	for sort, want := range cases {
 		if got := wordOrderBy(sort); got != want {
@@ -32,7 +35,7 @@ func TestWordOrderByRejectsUnknownSort(t *testing.T) {
 
 // 每种排序都必须以唯一列 id 收尾，否则 LIMIT/OFFSET 翻页会跨页重复或漏行
 func TestWordOrderByAlwaysHasUniqueTiebreaker(t *testing.T) {
-	for _, sort := range []string{"count", "time", "alpha", "unknown"} {
+	for _, sort := range []string{"count", "count_asc", "time", "time_asc", "alpha", "alpha_desc", "unknown"} {
 		clauses := strings.Split(wordOrderBy(sort), ",")
 		last := strings.TrimSpace(clauses[len(clauses)-1])
 		if !strings.HasPrefix(last, "id ") {
