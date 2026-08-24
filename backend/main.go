@@ -80,6 +80,8 @@ func main() {
 	mux.HandleFunc("DELETE /api/words/{id}", withTimeout(defaultRequestTimeout)(app.requireAuth(app.handleDeleteWord)))
 	mux.HandleFunc("POST /api/words/{id}/archive", withTimeout(defaultRequestTimeout)(app.requireAuth(app.handleArchiveWord)))
 	mux.HandleFunc("POST /api/words/{id}/unarchive", withTimeout(defaultRequestTimeout)(app.requireAuth(app.handleUnarchiveWord)))
+	mux.HandleFunc("GET /api/flashcards/queue", withTimeout(defaultRequestTimeout)(app.requireAuth(app.handleFlashcardQueue)))
+	mux.HandleFunc("POST /api/flashcards/review", withTimeout(defaultRequestTimeout)(app.requireAuth(app.handleFlashcardReview)))
 
 	mux.HandleFunc("POST /api/admin/users", withTimeout(defaultRequestTimeout)(app.requireAdmin(app.handleCreateUser)))
 	mux.HandleFunc("GET /api/admin/users", withTimeout(defaultRequestTimeout)(app.requireAdmin(app.handleListUsers)))
@@ -375,6 +377,8 @@ const (
 	defaultPageLimit = 100
 	maxPageLimit     = 200
 	statsTrendDays   = 14
+	// flashcardGroupSize 闪卡复习每组取出的卡片数量，背完一组后「再来一组」取下一批
+	flashcardGroupSize = 30
 )
 
 // parsePagination 解析并夹取分页参数，非法或缺失时退回默认值，避免一次拉走整张表
@@ -480,6 +484,77 @@ func (a *App) handleWordStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, stats)
+}
+
+// flashcardReviewRequest 一次闪卡自评请求：Rating 只能是 good / hard / again 三档之一
+type flashcardReviewRequest struct {
+	ID     int    `json:"id"`
+	Rating string `json:"rating"`
+}
+
+// validFlashcardRating 校验自评档位，只接受三个合法值，非法值一律拒绝
+func validFlashcardRating(rating string) bool {
+	return rating == "good" || rating == "hard" || rating == "again"
+}
+
+// handleFlashcardQueue 返回当前用户到期闪卡队列的一组（最多 flashcardGroupSize 张），前端本地翻卡自评
+func (a *App) handleFlashcardQueue(w http.ResponseWriter, r *http.Request) {
+	user := currentUser(r)
+	list, err := a.words.DueFlashcards(r.Context(), user.ID, flashcardGroupSize, time.Now())
+	if err != nil {
+		log.Printf("查询闪卡队列失败: %v", err)
+		writeError(w, http.StatusInternalServerError, "查询失败")
+		return
+	}
+	writeJSON(w, http.StatusOK, list)
+}
+
+// handleFlashcardReview 处理一次闪卡自评：读当前排期状态 → 按 SRS 算新间隔/难度 → 写回，返回更新后的词
+func (a *App) handleFlashcardReview(w http.ResponseWriter, r *http.Request) {
+	user := currentUser(r)
+
+	var req flashcardReviewRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "请求格式不正确")
+		return
+	}
+	if req.ID <= 0 || !validFlashcardRating(req.Rating) {
+		writeError(w, http.StatusBadRequest, "无效的评分")
+		return
+	}
+
+	list, err := a.words.FindByIDs(r.Context(), user.ID, []int{req.ID})
+	if err != nil {
+		log.Printf("查询单词失败: %v", err)
+		writeError(w, http.StatusInternalServerError, "查询失败")
+		return
+	}
+	if len(list) == 0 {
+		writeError(w, http.StatusNotFound, "单词不存在")
+		return
+	}
+	wd := list[0]
+
+	now := time.Now()
+	intervalDays, easeFactor := applySRSScheduling(wd.IntervalDays, wd.EaseFactor, req.Rating)
+	dueAt := now.AddDate(0, 0, intervalDays)
+	newCount := wd.ReviewCount + 1
+	// 「记住」直接归档（学完不再复习），模糊/不认识保持未归档、按 SRS 排期
+	archived := req.Rating == "good"
+
+	if err := a.words.ApplyFlashcardReview(r.Context(), req.ID, user.ID, newCount, intervalDays, easeFactor, dueAt, now, archived); err != nil {
+		log.Printf("更新闪卡复习状态失败: %v", err)
+		writeError(w, http.StatusInternalServerError, "更新失败")
+		return
+	}
+
+	wd.ReviewCount = newCount
+	wd.LastReviewedAt = now
+	wd.IntervalDays = intervalDays
+	wd.EaseFactor = easeFactor
+	wd.DueAt = &dueAt
+	wd.Archived = archived
+	writeJSON(w, http.StatusOK, wd)
 }
 
 func (a *App) handleDeleteWord(w http.ResponseWriter, r *http.Request) {

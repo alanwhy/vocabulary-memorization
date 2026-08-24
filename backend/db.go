@@ -115,6 +115,7 @@ func migrateSchema() {
 	migrateWordsTranslationStartedColumn()
 	migrateWordsArchivedColumn()
 	migrateWordsUserArchivedIndex()
+	migrateWordsSRSColumns()
 	migrateUsersLastLoginColumn()
 	mergeHistoricalWordSenses()
 	backfillWordDictionary()
@@ -183,6 +184,21 @@ func migrateWordsArchivedColumn() {
 		return
 	}
 	mustExec(`ALTER TABLE words ADD COLUMN archived TINYINT(1) NOT NULL DEFAULT 0`)
+}
+
+// migrateWordsSRSColumns 给 words 表补间隔重复（SRS）的三列：due_at（下次到期时间，NULL=从未用闪卡复习过）、
+// interval_days（当前间隔天数）、ease_factor（难度系数）。老词升级后 due_at 保持 NULL，
+// 视为「从未用闪卡复习过」，首次开启闪卡时全部立即到期，符合业务语义。
+func migrateWordsSRSColumns() {
+	if !columnExists("words", "due_at") {
+		mustExec(`ALTER TABLE words ADD COLUMN due_at DATETIME NULL`)
+	}
+	if !columnExists("words", "interval_days") {
+		mustExec(`ALTER TABLE words ADD COLUMN interval_days INT NOT NULL DEFAULT 0`)
+	}
+	if !columnExists("words", "ease_factor") {
+		mustExec(`ALTER TABLE words ADD COLUMN ease_factor DECIMAL(4,2) NOT NULL DEFAULT 2.50`)
+	}
 }
 
 // mergeHistoricalWordSenses 一次性把 words 表里历史遗留的、同词性被拆成多行的释义合并成一行；

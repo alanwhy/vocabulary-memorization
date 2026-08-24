@@ -1,11 +1,12 @@
 <script setup>
-import { RouterLink } from 'vue-router'
+import { RouterLink, useRoute } from 'vue-router'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useTheme } from '@/composables/useTheme'
 
 const auth = useAuthStore()
 const router = useRouter()
+const route = useRoute()
 const { theme, toggleTheme } = useTheme()
 
 async function logout() {
@@ -28,10 +29,11 @@ async function logout() {
       </button>
     </span>
     <span>
-      <RouterLink to="/">背单词</RouterLink>
-      <RouterLink to="/archive">归档</RouterLink>
-      <RouterLink to="/stats">统计</RouterLink>
-      <RouterLink v-if="auth.isAdmin" to="/admin">后台管理</RouterLink>
+      <RouterLink v-if="route.path !== '/'" to="/">背单词</RouterLink>
+      <RouterLink v-if="route.path !== '/flashcards'" to="/flashcards">闪卡</RouterLink>
+      <RouterLink v-if="route.path !== '/archive'" to="/archive">归档</RouterLink>
+      <RouterLink v-if="route.path !== '/stats'" to="/stats">统计</RouterLink>
+      <RouterLink v-if="auth.isAdmin && route.path !== '/admin'" to="/admin">后台管理</RouterLink>
       <button @click="logout">退出登录</button>
     </span>
   </div>

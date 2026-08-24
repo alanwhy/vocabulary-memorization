@@ -39,6 +39,8 @@ type wordStore interface {
 	Insert(ctx context.Context, userID int, wordKey, displayWord string, sensesJSON []byte, translating bool, now time.Time) (int, error)
 	FindByUserAndKey(ctx context.Context, userID int, wordKey string) (Word, []byte, error)
 	IncrementReview(ctx context.Context, id, newCount int, now time.Time) error
+	ApplyFlashcardReview(ctx context.Context, id, userID, newCount, intervalDays int, easeFactor float64, dueAt, now time.Time, archived bool) error
+	DueFlashcards(ctx context.Context, userID, limit int, now time.Time) ([]Word, error)
 	ListPage(ctx context.Context, userID int, archived bool, sort string, limit, offset int) ([]Word, error)
 	CountByUser(ctx context.Context, userID int, archived bool) (int, error)
 	Delete(ctx context.Context, id, userID int) (int64, error)

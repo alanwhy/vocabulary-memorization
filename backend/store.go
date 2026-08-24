@@ -34,6 +34,24 @@ func nullTimePtr(nt sql.NullTime) *time.Time {
 	return &t
 }
 
+// cloudMeaning 从 senses JSON 里提取词云 tooltip 要展示的中文释义：
+// 复用 mergeSensesByPos 合并同词性，再拼出所有 translation 用「；」连接；无释义返回空串。
+func cloudMeaning(sensesRaw []byte) string {
+	if len(sensesRaw) == 0 {
+		return ""
+	}
+	var senses []Sense
+	if err := json.Unmarshal(sensesRaw, &senses); err != nil {
+		return ""
+	}
+	merged := mergeSensesByPos(senses)
+	translations := make([]string, 0, len(merged))
+	for _, s := range merged {
+		translations = append(translations, s.Translation)
+	}
+	return strings.Join(translations, "；")
+}
+
 // userRepo 封装 users 表的数据访问
 type userRepo struct{ db *sql.DB }
 
@@ -167,7 +185,7 @@ func (r *sessionRepo) DeleteByUserExcept(ctx context.Context, userID int, except
 }
 
 // wordColumns words 表的完整列清单，配合 scanWordRows 使用，保证列顺序和扫描顺序一致
-const wordColumns = `id, word_key, display_word, senses, translating, archived, review_count, first_added_at, last_reviewed_at`
+const wordColumns = `id, word_key, display_word, senses, translating, archived, review_count, first_added_at, last_reviewed_at, due_at, interval_days, ease_factor`
 
 // scanWordRows 按 wordColumns 的列顺序把结果集扫成 []Word 并解开 senses JSON
 func scanWordRows(rows *sql.Rows) ([]Word, error) {
@@ -177,9 +195,11 @@ func scanWordRows(rows *sql.Rows) ([]Word, error) {
 	for rows.Next() {
 		var wd Word
 		var sensesRaw []byte
-		if err := rows.Scan(&wd.ID, &wd.WordKey, &wd.DisplayWord, &sensesRaw, &wd.Translating, &wd.Archived, &wd.ReviewCount, &wd.FirstAddedAt, &wd.LastReviewedAt); err != nil {
+		var dueAt sql.NullTime
+		if err := rows.Scan(&wd.ID, &wd.WordKey, &wd.DisplayWord, &sensesRaw, &wd.Translating, &wd.Archived, &wd.ReviewCount, &wd.FirstAddedAt, &wd.LastReviewedAt, &dueAt, &wd.IntervalDays, &wd.EaseFactor); err != nil {
 			return nil, err
 		}
+		wd.DueAt = nullTimePtr(dueAt)
 		if len(sensesRaw) > 0 {
 			if err := json.Unmarshal(sensesRaw, &wd.Senses); err != nil {
 				return nil, err
@@ -240,6 +260,34 @@ func (r *wordRepo) FindByUserAndKey(ctx context.Context, userID int, wordKey str
 func (r *wordRepo) IncrementReview(ctx context.Context, id, newCount int, now time.Time) error {
 	_, err := r.db.ExecContext(ctx, `UPDATE words SET review_count = ?, last_reviewed_at = ? WHERE id = ?`, newCount, now, id)
 	return err
+}
+
+// ApplyFlashcardReview 记录一次闪卡自评：累加背诵次数、刷新最近复习时间，并写入 SRS 排期结果
+// （下次到期时间、新间隔、新难度系数）与归档状态。「记住」时归档（不再复习），模糊/不认识保持未归档。
+// WHERE 同时限定 id 与 user_id，保证只更新当前用户自己的词。
+func (r *wordRepo) ApplyFlashcardReview(ctx context.Context, id, userID, newCount, intervalDays int, easeFactor float64, dueAt, now time.Time, archived bool) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE words SET review_count = ?, last_reviewed_at = ?, interval_days = ?, ease_factor = ?, due_at = ?, archived = ? WHERE id = ? AND user_id = ?`,
+		newCount, now, intervalDays, easeFactor, dueAt, archived, id, userID,
+	)
+	return err
+}
+
+// DueFlashcards 返回当前用户到期的闪卡队列：从未复习过（due_at 为 NULL）的词 + 已到期（due_at <= now）的词。
+// 只含未归档词。排序遵循「新词优先 → 到期时间先后 → 同一天到期按背诵次数最多优先 → id 收尾」，
+// id 收尾保证顺序确定。limit 控制每组取多少张，背完一组后这些词被排期/归档，下次再取自然轮到下一批。
+func (r *wordRepo) DueFlashcards(ctx context.Context, userID, limit int, now time.Time) ([]Word, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT `+wordColumns+` FROM words
+		 WHERE user_id = ? AND archived = 0 AND (due_at IS NULL OR due_at <= ?)
+		 ORDER BY (due_at IS NULL) DESC, due_at ASC, review_count DESC, id ASC
+		 LIMIT ?`,
+		userID, now, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return scanWordRows(rows)
 }
 
 // ListPage 按 sort 指定的顺序取一页单词；sort 只能是 wordOrderBy 认识的白名单值
@@ -367,7 +415,8 @@ func (r *wordRepo) FindByIDs(ctx context.Context, userID int, ids []int) ([]Word
 // Stats 统计页需要的聚合数值，用 3 条聚合 SQL 算出，不再把全量单词拉到前端。
 // SUM 在 0 行时返回 NULL，所以统一套 COALESCE 兜成 0。since 为本地时区的起始时间。
 // todaySince / todayUntil 划定今日背诵次数的统计窗口：[00:00:00, 23:59:59.999...)，
-// 对窗口内被复习过的每个单词计数 1（不累计历史 review_count），避免把历史背诵次数也加进来。
+// 对窗口内被复习过的每个单词计数 1（不累计历史 review_count），避免把历史背诵次数也加进来；
+// 闪卡「记住」会直接归档，所以这里不筛 archived，今天背过的词（含已归档）都算进今日背诵。
 func (r *wordRepo) Stats(ctx context.Context, userID int, since, since7, todaySince, todayUntil time.Time) (WordStats, error) {
 	var s WordStats
 
@@ -378,7 +427,7 @@ func (r *wordRepo) Stats(ctx context.Context, userID int, since, since7, todaySi
 		   COUNT(*),
 		   COALESCE(SUM(CASE WHEN archived = 0 THEN review_count ELSE 0 END), 0),
 		   COALESCE(SUM(archived = 0 AND translating = 1), 0),
-		   COALESCE(SUM(CASE WHEN archived = 0 AND last_reviewed_at >= ? AND last_reviewed_at < ? THEN 1 ELSE 0 END), 0)
+		   COALESCE(SUM(CASE WHEN last_reviewed_at >= ? AND last_reviewed_at < ? THEN 1 ELSE 0 END), 0)
 		 FROM words WHERE user_id = ?`,
 		todaySince, todayUntil, userID,
 	).Scan(&s.TotalWords, &s.ArchivedWords, &s.TotalAllWords, &s.TotalReviews, &s.TranslatingCount, &s.TodayReviews)
@@ -386,17 +435,18 @@ func (r *wordRepo) Stats(ctx context.Context, userID int, since, since7, todaySi
 		return WordStats{}, err
 	}
 
-	// 分档口径与前端 reviewBuckets 的 4 个标签一一对应：1 次 / 2-3 次 / 4-6 次 / 7 次以上
-	buckets := make([]int, 4)
+	// 分档口径与前端 reviewBuckets 的 5 个标签一一对应：1 次 / 2-3 次 / 4-6 次 / 7-10 次 / 10 次以上
+	buckets := make([]int, 5)
 	err = r.db.QueryRowContext(ctx,
 		`SELECT
 		   COALESCE(SUM(review_count = 1), 0),
 		   COALESCE(SUM(review_count BETWEEN 2 AND 3), 0),
 		   COALESCE(SUM(review_count BETWEEN 4 AND 6), 0),
-		   COALESCE(SUM(review_count >= 7), 0)
+		   COALESCE(SUM(review_count BETWEEN 7 AND 10), 0),
+		   COALESCE(SUM(review_count >= 11), 0)
 		 FROM words WHERE user_id = ? AND archived = 0`,
 		userID,
-	).Scan(&buckets[0], &buckets[1], &buckets[2], &buckets[3])
+	).Scan(&buckets[0], &buckets[1], &buckets[2], &buckets[3], &buckets[4])
 	if err != nil {
 		return WordStats{}, err
 	}
@@ -425,9 +475,10 @@ func (r *wordRepo) Stats(ctx context.Context, userID int, since, since7, todaySi
 		return WordStats{}, err
 	}
 
-	// 词云：近 7 天复习过的单词，权重用累计背诵次数，按次数降序取前 50 个避免词云过密
+	// 词云：近 7 天复习过的单词，权重用累计背诵次数，按次数降序取前 50 个避免词云过密；
+	// 顺带取出 senses 解析成中文释义，供前端 tooltip 展示
 	cloudRows, err := r.db.QueryContext(ctx,
-		`SELECT display_word, review_count FROM words
+		`SELECT display_word, review_count, senses FROM words
 		 WHERE user_id = ? AND archived = 0 AND last_reviewed_at >= ?
 		 ORDER BY review_count DESC, display_word ASC LIMIT 50`,
 		userID, since7,
@@ -440,9 +491,11 @@ func (r *wordRepo) Stats(ctx context.Context, userID int, since, since7, todaySi
 	s.WordCloud = []wordCloudItem{}
 	for cloudRows.Next() {
 		var it wordCloudItem
-		if err := cloudRows.Scan(&it.Word, &it.Count); err != nil {
+		var sensesRaw []byte
+		if err := cloudRows.Scan(&it.Word, &it.Count, &sensesRaw); err != nil {
 			return WordStats{}, err
 		}
+		it.Meaning = cloudMeaning(sensesRaw)
 		s.WordCloud = append(s.WordCloud, it)
 	}
 	if err := cloudRows.Err(); err != nil {

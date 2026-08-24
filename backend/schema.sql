@@ -45,6 +45,9 @@ CREATE TABLE IF NOT EXISTS words (
   review_count INT NOT NULL DEFAULT 1,
   first_added_at DATETIME NOT NULL,
   last_reviewed_at DATETIME NOT NULL,
+  due_at DATETIME NULL,
+  interval_days INT NOT NULL DEFAULT 0,
+  ease_factor DECIMAL(4,2) NOT NULL DEFAULT 2.50,
   UNIQUE KEY uniq_user_word (user_id, word_key),
   KEY idx_words_user_archived (user_id, archived),
   CONSTRAINT fk_words_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE

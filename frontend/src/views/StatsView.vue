@@ -8,6 +8,7 @@ const stats = ref({
   total_words: 0,
   total_reviews: 0,
   translating_count: 0,
+  archived_words: 0,
   review_buckets: [],
   daily_additions: [],
   word_cloud: [],
@@ -56,13 +57,13 @@ function renderCharts() {
   })
 
   distChart.setOption({
-    grid: { left: 56, right: 32, top: 12, bottom: 20 },
+    grid: { left: 72, right: 32, top: 12, bottom: 20 },
     tooltip: { trigger: 'axis' },
     xAxis: { type: 'value', minInterval: 1, axisLabel: { color: muted }, splitLine },
     yAxis: {
       type: 'category',
       data: reviewBuckets.value.map((b) => b.label),
-      axisLabel: { color: muted },
+      axisLabel: { color: muted, interval: 0 },
       axisLine,
     },
     series: [
@@ -76,7 +77,12 @@ function renderCharts() {
   })
 
   cloudChart.setOption({
-    tooltip: {},
+    tooltip: {
+      formatter: (params) => {
+        const d = params.data || {}
+        return d.meaning ? `${d.name} ×${d.value}<br/>${d.meaning}` : `${d.name} ×${d.value}`
+      },
+    },
     series: [
       {
         type: 'wordCloud',
@@ -142,8 +148,8 @@ onMounted(async () => {
           <div class="label">平均背诵次数</div>
         </div>
         <div class="card">
-          <div class="num">{{ stats.translating_count }}</div>
-          <div class="label">查词中</div>
+          <div class="num">{{ stats.archived_words }}</div>
+          <div class="label">已归档单词数</div>
         </div>
       </div>
 
@@ -202,7 +208,7 @@ onMounted(async () => {
   height: 220px;
 }
 .chart-dist {
-  height: 160px;
+  height: 220px;
 }
 .chart-cloud {
   height: 320px;

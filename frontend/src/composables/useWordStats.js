@@ -2,7 +2,7 @@ import { computed } from 'vue'
 
 const TREND_DAYS = 14
 
-const BUCKET_LABELS = ['1 次', '2-3 次', '4-6 次', '7 次以上']
+const BUCKET_LABELS = ['1 次', '2-3 次', '4-6 次', '7-10 次', '10 次以上']
 
 // 把 /api/stats 的聚合结果整理成图表要用的形状。
 // 数值本身由后端 SQL 算出——单词列表分页后前端手里没有全量数据，算不出这些统计。
@@ -46,7 +46,7 @@ export function useWordStats(stats) {
 
   // 词云数据：echarts-wordcloud 需要 { name, value } 形状
   const wordCloudData = computed(() =>
-    (stats.value.word_cloud || []).map((it) => ({ name: it.word, value: it.count })),
+    (stats.value.word_cloud || []).map((it) => ({ name: it.word, value: it.count, meaning: it.meaning })),
   )
 
   // 开头字母统计：后端已按字母排序，直接给 echarts 柱状图用

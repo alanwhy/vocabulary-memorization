@@ -1,6 +1,7 @@
 package main
 
 import (
+	"math"
 	"strings"
 	"time"
 )
@@ -52,6 +53,52 @@ type Word struct {
 	ReviewCount    int       `json:"review_count"`
 	FirstAddedAt   time.Time `json:"first_added_at"`
 	LastReviewedAt time.Time `json:"last_reviewed_at"`
+	// 间隔重复（SRS）排期状态：DueAt 为下次到期时间（NULL = 从未用闪卡复习过，视为新词立即到期），
+	// IntervalDays 为当前间隔天数，EaseFactor 为难度系数（区间 [1.30, 2.50]）。
+	DueAt        *time.Time `json:"due_at"`
+	IntervalDays int        `json:"interval_days"`
+	EaseFactor   float64    `json:"ease_factor"`
+}
+
+// applySRSScheduling 根据一次闪卡自评结果算出下一个复习间隔（天）和新的难度系数。
+// rating 只能是 good / hard / again，与前端三个评分按钮一一对应，采用简化版 SM-2：
+//   - good：间隔按难度系数倍增（首次为 1 天），难度不变
+//   - hard：间隔按 1.2 倍小幅增长（至少 1 天），难度下降 0.15
+//   - again：间隔重置回 1 天（明天再见），难度下降 0.20
+//
+// 难度系数始终收敛在 [1.30, 2.50] 并保留两位小数，避免越界或精度抖动。
+func applySRSScheduling(intervalDays int, easeFactor float64, rating string) (int, float64) {
+	const (
+		minEase    = 1.30
+		maxEase    = 2.50
+		hardFactor = 1.2
+	)
+
+	switch rating {
+	case "hard":
+		intervalDays = int(math.Round(float64(intervalDays) * hardFactor))
+		if intervalDays < 1 {
+			intervalDays = 1
+		}
+		easeFactor -= 0.15
+	case "again":
+		intervalDays = 1
+		easeFactor -= 0.20
+	default: // good（含未知值兜底，避免非法评分破坏排期）
+		if intervalDays == 0 {
+			intervalDays = 1
+		} else {
+			intervalDays = int(math.Round(float64(intervalDays) * easeFactor))
+		}
+	}
+
+	if easeFactor < minEase {
+		easeFactor = minEase
+	}
+	if easeFactor > maxEase {
+		easeFactor = maxEase
+	}
+	return intervalDays, math.Round(easeFactor*100) / 100
 }
 
 // User 对应数据库 users 表的一条记录；LastLoginAt 用指针表示“从未登录过”（数据库里为 NULL）
@@ -71,8 +118,8 @@ type UserWithStats struct {
 
 // pageResult 所有分页接口的统一响应信封；HasMore 由后端算好，前端不用自己拿 total 和 page 推
 type pageResult struct {
-	Items   interface{} `json:"items"`
-	Total   int         `json:"total"`
+	Items interface{} `json:"items"`
+	Total int         `json:"total"`
 	// TotalAll 不受筛选影响的整表总数（仅词库管理接口填充），用于顶部展示全库单词数。
 	TotalAll int  `json:"total_all,omitempty"`
 	Page     int  `json:"page"`
@@ -96,10 +143,11 @@ type dailyCount struct {
 	Count int    `json:"count"`
 }
 
-// wordCloudItem 词云里的一条：Word 为展示拼写，Count 为累计背诵次数（权重）
+// wordCloudItem 词云里的一条：Word 为展示拼写，Count 为累计背诵次数（权重），Meaning 为中文释义（tooltip 用）
 type wordCloudItem struct {
-	Word  string `json:"word"`
-	Count int    `json:"count"`
+	Word    string `json:"word"`
+	Count   int    `json:"count"`
+	Meaning string `json:"meaning"`
 }
 
 // letterStat 按开头字母分组的一条统计
