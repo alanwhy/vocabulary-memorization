@@ -6,16 +6,72 @@ import (
 	"time"
 )
 
-// Sense 一个单词的一个词性 + 对应释义
+// Sense 一个单词的一个词性 + 对应释义。
+// 强化字段平铺在这里：phonetic/root/affix/synonyms/antonyms/lookalikes 是词级信息，多词性下会重复存储，
+// 前端只取第一条词性的词级信息展示；example 是词义级，每条词性对应一句英文例句，
+// example_translation 是该例句的中文翻译。synonyms/antonyms/lookalikes 每个元素形如
+// "chance（机会）"，英文词后紧跟中文释义，前端无需二次拆解即可直接展示。
+// lookalikes 是最后加入的字段，故意不用 omitempty：即使没有形近词也序列化成 []，
+// 这样「字段是否为 nil」就能区分「最新 prompt 查过」和「老数据没这个 key」（见 sensesEnriched）。
 type Sense struct {
-	Pos         string `json:"pos"`
-	Translation string `json:"translation"`
+	Pos                string   `json:"pos"`
+	Translation        string   `json:"translation"`
+	Phonetic           string   `json:"phonetic,omitempty"`
+	Example            string   `json:"example,omitempty"`
+	ExampleTranslation string   `json:"example_translation,omitempty"`
+	Root               string   `json:"root,omitempty"`
+	Affix              string   `json:"affix,omitempty"`
+	Synonyms           []string `json:"synonyms,omitempty"`
+	Antonyms           []string `json:"antonyms,omitempty"`
+	Lookalikes         []string `json:"lookalikes"`
 }
 
-// mergeSensesByPos 按词性合并释义：同一词性的多条释义合并成一条，用中文分号分隔，保持首次出现顺序
+// sensesEnriched 判断一组释义是否已用最新 prompt 强化过（含例句/词根词缀/近反义/形近词）。
+// 以 lookalikes（形近词，最后加入的字段）是否为 nil 作为判据：最新 prompt 一定会返回
+// lookalikes 字段，即使没有形近词也是空数组 []，反序列化后是非 nil 空切片；老数据没这个 key，
+// 反序列化后是 nil。这样既能给缺形近词的老词补全，又不会在已齐全时重复调用大模型。
+func sensesEnriched(senses []Sense) bool {
+	if len(senses) == 0 {
+		return false
+	}
+	return senses[0].Lookalikes != nil
+}
+
+// mergeSenseEnrichment 把 src 的非空强化字段合并进 dst，字段级「首个非空值优先」：
+// 组内后出现的空字段不会覆盖前面已经记下的有效值。
+func mergeSenseEnrichment(dst *Sense, src Sense) {
+	if dst.Phonetic == "" && src.Phonetic != "" {
+		dst.Phonetic = src.Phonetic
+	}
+	if dst.Example == "" && src.Example != "" {
+		dst.Example = src.Example
+	}
+	if dst.ExampleTranslation == "" && src.ExampleTranslation != "" {
+		dst.ExampleTranslation = src.ExampleTranslation
+	}
+	if dst.Root == "" && src.Root != "" {
+		dst.Root = src.Root
+	}
+	if dst.Affix == "" && src.Affix != "" {
+		dst.Affix = src.Affix
+	}
+	if len(dst.Synonyms) == 0 && len(src.Synonyms) > 0 {
+		dst.Synonyms = src.Synonyms
+	}
+	if len(dst.Antonyms) == 0 && len(src.Antonyms) > 0 {
+		dst.Antonyms = src.Antonyms
+	}
+	if len(dst.Lookalikes) == 0 && len(src.Lookalikes) > 0 {
+		dst.Lookalikes = src.Lookalikes
+	}
+}
+
+// mergeSensesByPos 按词性合并释义：同一词性的多条释义合并成一条，用中文分号分隔，保持首次出现顺序。
+// 强化字段随合并一并保留（词级字段与 example 都取组内第一个非空值），避免合并后字段丢失。
 func mergeSensesByPos(senses []Sense) []Sense {
 	order := make([]string, 0, len(senses))
 	grouped := make(map[string][]string)
+	enrichment := make(map[string]Sense)
 	seen := make(map[string]bool)
 
 	for _, s := range senses {
@@ -26,6 +82,7 @@ func mergeSensesByPos(senses []Sense) []Sense {
 		}
 		if _, ok := grouped[pos]; !ok {
 			order = append(order, pos)
+			enrichment[pos] = s
 		}
 		key := pos + "\x00" + translation
 		if seen[key] {
@@ -33,11 +90,17 @@ func mergeSensesByPos(senses []Sense) []Sense {
 		}
 		seen[key] = true
 		grouped[pos] = append(grouped[pos], translation)
+		e := enrichment[pos]
+		mergeSenseEnrichment(&e, s)
+		enrichment[pos] = e
 	}
 
 	merged := make([]Sense, 0, len(order))
 	for _, pos := range order {
-		merged = append(merged, Sense{Pos: pos, Translation: strings.Join(grouped[pos], "；")})
+		e := enrichment[pos]
+		e.Pos = pos
+		e.Translation = strings.Join(grouped[pos], "；")
+		merged = append(merged, e)
 	}
 	return merged
 }

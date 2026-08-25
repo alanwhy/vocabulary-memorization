@@ -71,3 +71,51 @@ func TestApplySRSScheduling(t *testing.T) {
 		}
 	}
 }
+
+// TestSensesEnriched 覆盖「是否已用最新 prompt 强化」判定的各边界。
+// 判据是 lookalikes（形近词，最后加入的字段）是否为 nil：非 nil（含空数组）算已强化，nil 算未强化。
+func TestSensesEnriched(t *testing.T) {
+	cases := []struct {
+		name   string
+		senses []Sense
+		want   bool
+	}{
+		{"空数组", nil, false},
+		{"无任何强化字段", []Sense{{Pos: "n.", Translation: "苹果"}}, false},
+		{"只有音标无形近词", []Sense{{Pos: "n.", Translation: "苹果", Phonetic: "/ˈæp(ə)l/"}}, false},
+		{"形近词为空数组", []Sense{{Lookalikes: []string{}}}, true},
+		{"有形近词", []Sense{{Lookalikes: []string{"transit（过境）"}}}, true},
+		{"多词性第一条有形近词", []Sense{{Lookalikes: []string{}}, {Pos: "v.", Translation: "预订"}}, true},
+	}
+	for _, c := range cases {
+		if got := sensesEnriched(c.senses); got != c.want {
+			t.Fatalf("%s: sensesEnriched(%+v) = %v, want %v", c.name, c.senses, got, c.want)
+		}
+	}
+}
+
+// TestMergeSensesByPosPreservesEnrichment 覆盖合并同词性时强化字段不丢：
+// 词级字段取组内第一个非空值，example 在第一条为空时回落到第二条非空值。
+func TestMergeSensesByPosPreservesEnrichment(t *testing.T) {
+	input := []Sense{
+		{Pos: "n.", Translation: "苹果", Phonetic: "/ˈæp(ə)l/", Example: "", Root: "", Affix: "", Synonyms: []string{"pome"}},
+		{Pos: "n.", Translation: "水果", Phonetic: "", Example: "An apple a day keeps the doctor away.", Synonyms: []string{}},
+	}
+	got := mergeSensesByPos(input)
+	if len(got) != 1 {
+		t.Fatalf("期望合并成 1 条，got %+v", got)
+	}
+	merged := got[0]
+	if merged.Translation != "苹果；水果" {
+		t.Fatalf("Translation = %q, want 苹果；水果", merged.Translation)
+	}
+	if merged.Phonetic != "/ˈæp(ə)l/" {
+		t.Fatalf("Phonetic = %q, want 保留第一个非空值", merged.Phonetic)
+	}
+	if merged.Example != "An apple a day keeps the doctor away." {
+		t.Fatalf("Example = %q, want 第一条为空时取第二条非空值", merged.Example)
+	}
+	if len(merged.Synonyms) != 1 || merged.Synonyms[0] != "pome" {
+		t.Fatalf("Synonyms = %v, want 保留 [pome]", merged.Synonyms)
+	}
+}

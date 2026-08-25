@@ -1,7 +1,10 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { apiGet, apiPost } from '@/api/client'
+import { useVocabularyIndex } from '@/composables/useVocabularyIndex'
+import { tokenizeExample, splitWordRef } from '@/utils/highlight'
 
+const vocab = useVocabularyIndex()
 const cards = ref([])
 const index = ref(0)
 const flipped = ref(false)
@@ -11,6 +14,30 @@ const error = ref('')
 const doneCount = ref(0)
 
 const current = computed(() => cards.value[index.value] ?? null)
+// 词级强化信息（音标/词根词缀/近反义）从第一条词性取（平铺模型下每条重复）
+const firstSense = computed(() => (current.value?.senses && current.value.senses[0]) || {})
+const phonetic = computed(() => firstSense.value.phonetic || '')
+const rootAffix = computed(() => {
+  const parts = [firstSense.value.root, firstSense.value.affix].filter(Boolean)
+  return parts.join(' + ') // 只返回词根词缀内容，「词根词缀：」标题由模板统一渲染
+})
+const enrichGroups = computed(() => {
+  const mk = (label, list) => ({ label, refs: (list || []).map((r) => splitWordRef(r, vocab.lookup)) })
+  return [
+    mk('近义词', firstSense.value.synonyms),
+    mk('反义词', firstSense.value.antonyms),
+    mk('形近词', firstSense.value.lookalikes),
+  ].filter((g) => g.refs.length)
+})
+const hasEnrichment = computed(() => !!(rootAffix.value || enrichGroups.value.length))
+
+function hlClass(level) {
+  return `hl-word hl-word--l${level}`
+}
+
+function exampleTokens(s) {
+  return tokenizeExample(s.example || '', vocab.lookup)
+}
 // 当前组是否已背完（含空组）
 const finished = computed(() => !loading.value && index.value >= cards.value.length)
 // 真正没有待复习单词（组为空）
@@ -58,7 +85,10 @@ async function rate(rating) {
   }
 }
 
-onMounted(loadQueue)
+onMounted(() => {
+  loadQueue()
+  vocab.ensure()
+})
 </script>
 
 <template>
@@ -89,16 +119,31 @@ onMounted(loadQueue)
             <span class="hint">点击翻面看释义</span>
           </div>
           <div class="face back">
+            <span class="phonetic" v-if="phonetic">{{ phonetic }}</span>
             <div class="senses" v-if="current.senses && current.senses.length">
               <div class="sense" v-for="(s, i) in current.senses" :key="i">
                 <span class="pos" v-if="s.pos">{{ s.pos }}</span>
                 <span class="translation">{{ s.translation }}</span>
+                <span class="example" v-if="s.example || s.example_translation">
+                  <span class="example-en" v-if="s.example">
+                    <span v-for="(t, i) in exampleTokens(s)" :key="i" :class="t.level ? hlClass(t.level) : ''">{{ t.text }}</span>
+                  </span>
+                  <span class="example-trans" v-if="s.example_translation">{{ s.example_translation }}</span>
+                </span>
               </div>
             </div>
             <div class="senses" v-else>
               <div class="sense">
                 <span class="translation pending">{{ current.translating ? '查词中...' : '暂无释义' }}</span>
               </div>
+            </div>
+            <div class="enrich" v-if="hasEnrichment">
+              <span v-if="rootAffix">
+                <span class="enrich-label">词根词缀：</span>{{ rootAffix }}
+              </span>
+              <span v-for="g in enrichGroups" :key="g.label">
+                <span class="enrich-label">{{ g.label }}：</span><span v-for="(r, i) in g.refs" :key="i">{{ i > 0 ? '、' : '' }}<span :class="r.level ? hlClass(r.level) : ''">{{ r.word }}</span>{{ r.rest }}</span>
+              </span>
             </div>
             <span class="count">已背 ×{{ current.review_count }}</span>
           </div>
@@ -239,6 +284,37 @@ onMounted(loadQueue)
 .sense .translation.pending {
   color: var(--muted);
   font-style: italic;
+}
+.sense .example {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex-basis: 100%;
+}
+.sense .example-en {
+  font-size: 13px;
+  color: var(--muted);
+  font-style: italic;
+}
+.sense .example-trans {
+  font-size: 13px;
+  color: var(--muted);
+}
+.face .phonetic {
+  font-size: 16px;
+  color: var(--muted);
+}
+.enrich {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  justify-content: center;
+  font-size: 12px;
+  color: var(--muted);
+}
+.enrich-label {
+  font-weight: 600;
+  color: var(--text);
 }
 .face .count {
   font-size: 12px;

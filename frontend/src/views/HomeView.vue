@@ -5,6 +5,7 @@ import { apiGet, apiPost } from '@/api/client'
 import { usePaginatedList } from '@/composables/usePaginatedList'
 import { useWordActions } from '@/composables/useWordActions'
 import { useTranslatingPoll } from '@/composables/useTranslatingPoll'
+import { refreshVocabularyIndex } from '@/composables/useVocabularyIndex'
 import LoginForm from '@/components/auth/LoginForm.vue'
 import WordList from '@/components/word/WordList.vue'
 
@@ -142,6 +143,8 @@ async function submitWord() {
     inputWord.value = ''
     scheduleIfNeeded()
     loadStats()
+    // 录入（或再次录入）后词库发生变化，刷新索引让高亮随新词/次数实时更新
+    refreshVocabularyIndex()
   } catch (e) {
     submitError.value = e.message || '记录失败'
   } finally {

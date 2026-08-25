@@ -69,6 +69,19 @@ func formatSenses(senses []Sense) string {
 	return strings.Join(parts, "；")
 }
 
+// handleVocabularyIndex 返回全局词库的全量 word_key -> occurrence_count 索引。
+// 前端渲染例句/近反义/形近词时据此高亮「词库里出现过的词」，并按出现次数分级着色。
+// 索引只含 word_key 和出现次数两个字段，不带释义，保证全量返回也足够轻量。
+func (a *App) handleVocabularyIndex(w http.ResponseWriter, r *http.Request) {
+	items, err := a.dict.VocabularyIndex(r.Context())
+	if err != nil {
+		log.Printf("查询词库索引失败: %v", err)
+		writeError(w, http.StatusInternalServerError, "查询失败")
+		return
+	}
+	writeJSON(w, http.StatusOK, items)
+}
+
 // handleListDictionary 管理员查看全局词库：单词、释义、出现次数、最后更新时间。
 // 分页 + 关键字过滤 + 释义状态过滤都在数据库侧完成，前端只渲染当前页。
 // status 取值：no_definition（暂无释义）/ has_definition（已有释义）/ 空（不过滤）。

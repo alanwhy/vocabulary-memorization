@@ -76,6 +76,7 @@ func main() {
 	mux.HandleFunc("POST /api/words", withTimeout(defaultRequestTimeout)(app.requireAuth(app.handleAddWord)))
 	mux.HandleFunc("GET /api/words", withTimeout(defaultRequestTimeout)(app.requireAuth(app.handleListWords)))
 	mux.HandleFunc("GET /api/words/translating", withTimeout(defaultRequestTimeout)(app.requireAuth(app.handleListTranslatingWords)))
+	mux.HandleFunc("GET /api/vocabulary", withTimeout(defaultRequestTimeout)(app.requireAuth(app.handleVocabularyIndex)))
 	mux.HandleFunc("GET /api/stats", withTimeout(defaultRequestTimeout)(app.requireAuth(app.handleWordStats)))
 	mux.HandleFunc("DELETE /api/words/{id}", withTimeout(defaultRequestTimeout)(app.requireAuth(app.handleDeleteWord)))
 	mux.HandleFunc("POST /api/words/{id}/archive", withTimeout(defaultRequestTimeout)(app.requireAuth(app.handleArchiveWord)))
@@ -173,8 +174,11 @@ func (a *App) handleAddWord(w http.ResponseWriter, r *http.Request) {
 	// 不管是不是这个用户第一次输入，先登记一次全局词库的出现次数
 	a.upsertDictionaryOccurrence(r.Context(), wordKey, raw, now)
 
-	// 全局词库如果已经缓存过这个词的释义，直接复用，不用再问一次大模型
+	// 全局词库如果已经缓存过这个词的释义，直接复用，不用再问一次大模型；
+	// 但缓存命中的可能是升级前的旧数据（缺音标等强化字段），此时仍需后台补全一次。
 	cachedSenses, cacheHit := a.lookupDictionarySenses(r.Context(), wordKey)
+	needsEnrichment := cacheHit && !sensesEnriched(cachedSenses)
+	translating := !cacheHit || needsEnrichment
 	initialSenses := []Sense{}
 	if cacheHit {
 		initialSenses = cachedSenses
@@ -184,7 +188,7 @@ func (a *App) handleAddWord(w http.ResponseWriter, r *http.Request) {
 		sensesJSON = []byte("[]")
 	}
 
-	wordID, err := a.words.Insert(r.Context(), user.ID, wordKey, raw, sensesJSON, !cacheHit, now)
+	wordID, err := a.words.Insert(r.Context(), user.ID, wordKey, raw, sensesJSON, translating, now)
 	if err != nil {
 		// 并发下可能有另一个请求刚好抢先插入了同一个单词，退化为累加次数
 		if mysqlErr, ok := err.(*mysqldriver.MySQLError); ok && mysqlErr.Number == 1062 {
@@ -197,7 +201,7 @@ func (a *App) handleAddWord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !cacheHit {
+	if translating {
 		a.spawnTranslation(wordID, wordKey)
 	}
 
@@ -206,7 +210,7 @@ func (a *App) handleAddWord(w http.ResponseWriter, r *http.Request) {
 		WordKey:        wordKey,
 		DisplayWord:    raw,
 		Senses:         initialSenses,
-		Translating:    !cacheHit,
+		Translating:    translating,
 		ReviewCount:    1,
 		FirstAddedAt:   now,
 		LastReviewedAt: now,
@@ -360,6 +364,17 @@ func (a *App) tryIncrementExisting(w http.ResponseWriter, r *http.Request, userI
 		}
 	}
 
+	// 再次录入同一词时，如果释义还是旧数据（缺音标等强化字段）且不在查词中，后台补全一次；
+	// translating 标志既让前端显示「查词中」并轮询，也防止快速连点重复触发查词。
+	if !sensesEnriched(existing.Senses) && !existing.Translating {
+		if err := a.words.MarkTranslating(r.Context(), existing.ID, now); err != nil {
+			log.Printf("标记补全状态失败 word=%s: %v", wordKey, err)
+		} else {
+			existing.Translating = true
+			a.spawnTranslation(existing.ID, existing.WordKey)
+		}
+	}
+
 	newCount := existing.ReviewCount + 1
 	if err := a.words.IncrementReview(r.Context(), existing.ID, newCount, now); err != nil {
 		log.Printf("更新单词失败: %v", err)
@@ -374,7 +389,7 @@ func (a *App) tryIncrementExisting(w http.ResponseWriter, r *http.Request, userI
 }
 
 const (
-	defaultPageLimit = 100
+	defaultPageLimit = 20
 	maxPageLimit     = 200
 	statsTrendDays   = 14
 	// flashcardGroupSize 闪卡复习每组取出的卡片数量，背完一组后「再来一组」取下一批

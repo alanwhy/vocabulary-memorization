@@ -174,6 +174,7 @@ onMounted(reset)
           <td>{{ d.display_word }}</td>
           <td>
             <div class="senses" v-if="d.senses && d.senses.length">
+              <div class="phonetic" v-if="d.senses[0].phonetic">{{ d.senses[0].phonetic }}</div>
               <div class="sense" v-for="(s, idx) in d.senses" :key="idx">
                 <span class="pos" v-if="s.pos">{{ s.pos }}</span>
                 <span class="translation">{{ s.translation }}</span>
@@ -252,6 +253,10 @@ onMounted(reset)
   border-color: var(--border);
   color: var(--muted);
   cursor: default;
+}
+.phonetic {
+  font-size: 12px;
+  color: var(--muted);
 }
 .check-col {
   width: 36px;

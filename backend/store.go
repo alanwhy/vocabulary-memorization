@@ -337,6 +337,13 @@ func (r *wordRepo) MarkTranslationStarted(ctx context.Context, id int, now time.
 	return err
 }
 
+// MarkTranslating 把单词标记为「查词中」并刷新查词开始时间，用于再次录入发现未强化时触发补全：
+// translating=1 让前端显示「查词中」并轮询，同时充当防重标志，避免快速连点重复触发查词。
+func (r *wordRepo) MarkTranslating(ctx context.Context, id int, now time.Time) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE words SET translating = 1, translation_started_at = ? WHERE id = ?`, now, id)
+	return err
+}
+
 // FindTranslating 返回所有 translating=1 的记录（进程重启前未完成的查词任务）
 func (r *wordRepo) FindTranslating(ctx context.Context) ([]Word, error) {
 	rows, err := r.db.QueryContext(ctx, `SELECT id, word_key FROM words WHERE translating = 1`)
@@ -531,6 +538,33 @@ func (r *wordRepo) Stats(ctx context.Context, userID int, since, since7, todaySi
 // dictionaryRepo 封装 word_dictionary 表的数据访问
 type dictionaryRepo struct{ db *sql.DB }
 
+// vocabularyItem 词库索引里的一项：word_key 到全局出现次数的映射，
+// 供前端渲染例句/近反义/形近词时做「是否在词库、出现多少次」的高亮判断。
+type vocabularyItem struct {
+	WordKey         string `json:"word_key"`
+	OccurrenceCount int    `json:"occurrence_count"`
+}
+
+// VocabularyIndex 返回全局词库的全量 word_key -> occurrence_count 索引。
+// 前端据此高亮例句/近反义/形近词里出现过的词，并按出现次数分级着色。
+func (r *dictionaryRepo) VocabularyIndex(ctx context.Context) ([]vocabularyItem, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT word_key, occurrence_count FROM word_dictionary`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := []vocabularyItem{}
+	for rows.Next() {
+		var it vocabularyItem
+		if err := rows.Scan(&it.WordKey, &it.OccurrenceCount); err != nil {
+			return nil, err
+		}
+		items = append(items, it)
+	}
+	return items, rows.Err()
+}
+
 func (r *dictionaryRepo) UpsertOccurrence(ctx context.Context, wordKey, displayWord string, now time.Time) error {
 	_, err := r.db.ExecContext(ctx,
 		`INSERT INTO word_dictionary (word_key, display_word, senses, occurrence_count, first_seen_at, last_updated_at)
@@ -548,9 +582,17 @@ func (r *dictionaryRepo) LookupSenses(ctx context.Context, wordKey string) ([]by
 	return sensesRaw, err
 }
 
+// SaveSenses 只在「缓存里还没有强化数据」时写入，避免并发下互相覆盖。
+// 条件里额外判 $[0].phonetic：存量旧数据只含 pos/translation（无 phonetic），
+// 补全后需要被新数据升级覆盖，所以把「未强化」也当作可写。
 func (r *dictionaryRepo) SaveSenses(ctx context.Context, wordKey string, sensesJSON []byte) error {
 	_, err := r.db.ExecContext(ctx,
-		`UPDATE word_dictionary SET senses = ? WHERE word_key = ? AND (senses IS NULL OR JSON_LENGTH(senses) = 0)`,
+		`UPDATE word_dictionary SET senses = ?
+		 WHERE word_key = ?
+		   AND (senses IS NULL
+		        OR JSON_LENGTH(senses) = 0
+		        OR JSON_EXTRACT(senses, '$[0].phonetic') IS NULL
+		        OR JSON_EXTRACT(senses, '$[0].phonetic') = '')`,
 		sensesJSON, wordKey,
 	)
 	return err

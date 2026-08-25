@@ -131,6 +131,19 @@ h2 {
 .count-badge--l4 { background: var(--count-4-bg); color: var(--count-4-fg); }
 .count-badge--l5 { background: var(--count-5-bg); color: var(--count-5-fg); }
 .count-badge--l6 { background: var(--count-6-bg); color: var(--count-6-fg); }
+/* 词库命中高亮：例句/近反义/形近词里出现过的词，按出现次数阶梯着色（复用 count-badge 配色） */
+.hl-word {
+  padding: 0 3px;
+  border-radius: 4px;
+  font-weight: 600;
+  background: var(--count-1-bg);
+  color: var(--count-1-fg);
+}
+.hl-word--l2 { background: var(--count-2-bg); color: var(--count-2-fg); }
+.hl-word--l3 { background: var(--count-3-bg); color: var(--count-3-fg); }
+.hl-word--l4 { background: var(--count-4-bg); color: var(--count-4-fg); }
+.hl-word--l5 { background: var(--count-5-bg); color: var(--count-5-fg); }
+.hl-word--l6 { background: var(--count-6-bg); color: var(--count-6-fg); }
 /* 列表底部的滚动加载状态 */
 .load-state {
   text-align: center;

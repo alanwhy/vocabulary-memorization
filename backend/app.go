@@ -47,6 +47,7 @@ type wordStore interface {
 	SetArchived(ctx context.Context, id, userID int, archived bool) (int64, error)
 	UpdateSenses(ctx context.Context, id int, sensesJSON []byte) error
 	MarkTranslationStarted(ctx context.Context, id int, now time.Time) error
+	MarkTranslating(ctx context.Context, id int, now time.Time) error
 	FindTranslating(ctx context.Context) ([]Word, error)
 	FindTranslatingStale(ctx context.Context, threshold time.Time) ([]Word, error)
 	FindTranslatingByUser(ctx context.Context, userID int) ([]Word, error)
@@ -58,6 +59,7 @@ type dictionaryStore interface {
 	UpsertOccurrence(ctx context.Context, wordKey, displayWord string, now time.Time) error
 	LookupSenses(ctx context.Context, wordKey string) ([]byte, error)
 	SaveSenses(ctx context.Context, wordKey string, sensesJSON []byte) error
+	VocabularyIndex(ctx context.Context) ([]vocabularyItem, error)
 	List(ctx context.Context) ([]dictionaryEntry, error)
 	ListPage(ctx context.Context, keyword, status string, limit, offset int) ([]dictionaryEntry, error)
 	Count(ctx context.Context, keyword, status string) (int, error)
