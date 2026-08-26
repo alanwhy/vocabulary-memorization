@@ -41,9 +41,12 @@ type wordStore interface {
 	IncrementReview(ctx context.Context, id, newCount int, now time.Time) error
 	ApplyFlashcardReview(ctx context.Context, id, userID, newCount, intervalDays int, easeFactor float64, dueAt, now time.Time, archived bool) error
 	DueFlashcards(ctx context.Context, userID, limit int, now time.Time) ([]Word, error)
-	ListPage(ctx context.Context, userID int, archived bool, sort string, limit, offset int) ([]Word, error)
-	CountByUser(ctx context.Context, userID int, archived bool) (int, error)
+	ListPage(ctx context.Context, userID int, archived bool, keyword, status, sort string, limit, offset int) ([]Word, error)
+	CountByUser(ctx context.Context, userID int, archived bool, keyword, status string) (int, error)
+	ResetReviewCounts(ctx context.Context, userID int) (int64, error)
 	Delete(ctx context.Context, id, userID int) (int64, error)
+	DeleteByWordKey(ctx context.Context, wordKey string) (int64, error)
+	DeleteByWordKeys(ctx context.Context, wordKeys []string) (int64, error)
 	SetArchived(ctx context.Context, id, userID int, archived bool) (int64, error)
 	UpdateSenses(ctx context.Context, id int, sensesJSON []byte) error
 	MarkTranslationStarted(ctx context.Context, id int, now time.Time) error

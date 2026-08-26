@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { apiGet, apiPost } from '@/api/client'
+import { apiGet, apiPost, TOKEN_KEY } from '@/api/client'
 
 export const useAuthStore = defineStore('auth', {
   state: () => ({
@@ -16,6 +16,11 @@ export const useAuthStore = defineStore('auth', {
       if (this.checking) return
       this.checking = true
       try {
+        // 没有 token 就没必要请求 /api/me，直接当作未登录
+        if (!localStorage.getItem(TOKEN_KEY)) {
+          this.currentUser = null
+          return
+        }
         this.currentUser = await apiGet('/api/me')
       } catch {
         this.currentUser = null
@@ -25,14 +30,17 @@ export const useAuthStore = defineStore('auth', {
       }
     },
     async login(username, password) {
-      this.currentUser = await apiPost('/api/login', { username, password })
+      const { token, user } = await apiPost('/api/login', { username, password })
+      localStorage.setItem(TOKEN_KEY, token)
+      this.currentUser = user
       this.checked = true
-      return this.currentUser
+      return user
     },
     async logout() {
       try {
         await apiPost('/api/logout')
       } finally {
+        localStorage.removeItem(TOKEN_KEY)
         this.currentUser = null
       }
     },

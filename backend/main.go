@@ -75,6 +75,7 @@ func main() {
 
 	mux.HandleFunc("POST /api/words", withTimeout(defaultRequestTimeout)(app.requireAuth(app.handleAddWord)))
 	mux.HandleFunc("GET /api/words", withTimeout(defaultRequestTimeout)(app.requireAuth(app.handleListWords)))
+	mux.HandleFunc("POST /api/words/reset-counts", withTimeout(defaultRequestTimeout)(app.requireAuth(app.handleResetReviewCounts)))
 	mux.HandleFunc("GET /api/words/translating", withTimeout(defaultRequestTimeout)(app.requireAuth(app.handleListTranslatingWords)))
 	mux.HandleFunc("GET /api/vocabulary", withTimeout(defaultRequestTimeout)(app.requireAuth(app.handleVocabularyIndex)))
 	mux.HandleFunc("GET /api/stats", withTimeout(defaultRequestTimeout)(app.requireAuth(app.handleWordStats)))
@@ -438,21 +439,35 @@ func (a *App) handleListWords(w http.ResponseWriter, r *http.Request) {
 	user := currentUser(r)
 	archived := r.URL.Query().Get("archived") == "1"
 	sort := r.URL.Query().Get("sort")
+	keyword := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("keyword")))
+	status := r.URL.Query().Get("status")
 	page, limit, offset := parsePagination(r)
 
-	total, err := a.words.CountByUser(r.Context(), user.ID, archived)
+	total, err := a.words.CountByUser(r.Context(), user.ID, archived, keyword, status)
 	if err != nil {
 		log.Printf("统计单词总数失败: %v", err)
 		writeError(w, http.StatusInternalServerError, "查询失败")
 		return
 	}
-	list, err := a.words.ListPage(r.Context(), user.ID, archived, sort, limit, offset)
+	list, err := a.words.ListPage(r.Context(), user.ID, archived, keyword, status, sort, limit, offset)
 	if err != nil {
 		log.Printf("查询列表失败: %v", err)
 		writeError(w, http.StatusInternalServerError, "查询失败")
 		return
 	}
 	writeJSON(w, http.StatusOK, newPageResult(list, total, page, limit))
+}
+
+// handleResetReviewCounts 把当前用户所有单词的背诵次数重置为 1（幂等）。个人中心的
+// 「重置次数」按钮调用，前端做二次确认。只动 review_count，不影响 SRS 排期与最近复习时间。
+func (a *App) handleResetReviewCounts(w http.ResponseWriter, r *http.Request) {
+	user := currentUser(r)
+	if _, err := a.words.ResetReviewCounts(r.Context(), user.ID); err != nil {
+		log.Printf("重置单词次数失败 user_id=%d: %v", user.ID, err)
+		writeError(w, http.StatusInternalServerError, "重置失败")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // handleListTranslatingWords 供前端轮询查词进度。

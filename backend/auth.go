@@ -18,7 +18,6 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-const sessionCookieName = "session_token"
 const sessionTTL = 30 * 24 * time.Hour
 
 type contextKey string
@@ -28,6 +27,12 @@ const userContextKey contextKey = "user"
 type loginRequest struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
+}
+
+// loginResponse 登录成功响应：token 供前端存本地并在后续请求带 Authorization 头，user 直接给前端展示
+type loginResponse struct {
+	Token string `json:"token"`
+	User  User   `json:"user"`
 }
 
 // bootstrapAdmin 确保至少存在一个超管账号；如果没有，用环境变量里的用户名密码创建一个。
@@ -161,8 +166,8 @@ func (a *App) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "修改失败")
 		return
 	}
-	if cookie, err := r.Cookie(sessionCookieName); err == nil {
-		if err := a.sessions.DeleteByUserExcept(r.Context(), user.ID, cookie.Value); err != nil {
+	if token := bearerToken(r); token != "" {
+		if err := a.sessions.DeleteByUserExcept(r.Context(), user.ID, token); err != nil {
 			log.Printf("清除旧会话失败 user_id=%d: %v", user.ID, err)
 		}
 	} else if err := a.sessions.DeleteByUser(r.Context(), user.ID); err != nil {
@@ -230,33 +235,15 @@ func (a *App) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	user.LastLoginAt = &now
 
-	http.SetCookie(w, &http.Cookie{
-		Name:     sessionCookieName,
-		Value:    token,
-		Path:     "/",
-		Expires:  expiresAt,
-		HttpOnly: true,
-		Secure:   a.cfg.CookieSecure,
-		SameSite: http.SameSiteLaxMode,
-	})
-	writeJSON(w, http.StatusOK, user)
+	writeJSON(w, http.StatusOK, loginResponse{Token: token, User: user})
 }
 
 func (a *App) handleLogout(w http.ResponseWriter, r *http.Request) {
-	if cookie, err := r.Cookie(sessionCookieName); err == nil {
-		if err := a.sessions.DeleteByToken(r.Context(), cookie.Value); err != nil {
+	if token := bearerToken(r); token != "" {
+		if err := a.sessions.DeleteByToken(r.Context(), token); err != nil {
 			log.Printf("清除会话失败: %v", err)
 		}
 	}
-	http.SetCookie(w, &http.Cookie{
-		Name:     sessionCookieName,
-		Value:    "",
-		Path:     "/",
-		Expires:  time.Unix(0, 0),
-		HttpOnly: true,
-		Secure:   a.cfg.CookieSecure,
-		SameSite: http.SameSiteLaxMode,
-	})
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -280,17 +267,32 @@ func currentUser(r *http.Request) *User {
 	return u
 }
 
-// requireAuth 校验会话 cookie，未登录返回 401；登录成功后把用户信息塞进 context 供后续 handler 使用，
+// bearerToken 从 Authorization 头里提取 Bearer token；格式必须是 "Bearer <token>"。
+// 缺失、大小写不对或 token 为空都返回空串，由 requireAuth 统一按未登录处理。
+func bearerToken(r *http.Request) string {
+	const prefix = "Bearer "
+	h := r.Header.Get("Authorization")
+	if !strings.HasPrefix(h, prefix) {
+		return ""
+	}
+	token := strings.TrimSpace(h[len(prefix):])
+	if token == "" {
+		return ""
+	}
+	return token
+}
+
+// requireAuth 校验 Authorization 头里的 Bearer token，未登录返回 401；登录成功后把用户信息塞进 context 供后续 handler 使用，
 // 同时按滑动过期策略续期会话。
 func (a *App) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		cookie, err := r.Cookie(sessionCookieName)
-		if err != nil {
+		token := bearerToken(r)
+		if token == "" {
 			writeError(w, http.StatusUnauthorized, "请先登录")
 			return
 		}
 
-		user, expiresAt, err := a.sessions.FindWithUser(r.Context(), cookie.Value)
+		user, expiresAt, err := a.sessions.FindWithUser(r.Context(), token)
 
 		if err == sql.ErrNoRows || (err == nil && time.Now().After(expiresAt)) {
 			writeError(w, http.StatusUnauthorized, "请先登录")
@@ -303,7 +305,7 @@ func (a *App) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 		}
 
 		newExpiry := time.Now().Add(sessionTTL)
-		if err := a.sessions.Touch(r.Context(), cookie.Value, newExpiry); err != nil {
+		if err := a.sessions.Touch(r.Context(), token, newExpiry); err != nil {
 			log.Printf("续期会话失败: %v", err)
 		}
 

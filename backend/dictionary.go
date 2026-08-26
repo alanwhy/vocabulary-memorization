@@ -172,14 +172,17 @@ func (a *App) handleExportDictionary(w http.ResponseWriter, r *http.Request) {
 	writer.Flush()
 }
 
-// handleDeleteDictionaryEntry 管理员删除全局词库里的一条缓存记录；只影响词库缓存本身，
-// 不影响任何用户已经保存在自己单词表里的记录
+// handleDeleteDictionaryEntry 管理员删除全局词库里的一条缓存记录，同时删除所有用户
+// 已保存的同名单词（word_key 匹配）。管理侧删除即从用户侧一并移除。
 func (a *App) handleDeleteDictionaryEntry(w http.ResponseWriter, r *http.Request) {
 	wordKey := r.PathValue("word_key")
 	if err := a.dict.Delete(r.Context(), wordKey); err != nil {
 		log.Printf("删除词库记录失败 word=%s: %v", wordKey, err)
 		writeError(w, http.StatusInternalServerError, "删除失败")
 		return
+	}
+	if _, err := a.words.DeleteByWordKey(r.Context(), wordKey); err != nil {
+		log.Printf("删除用户单词失败 word=%s: %v", wordKey, err)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -212,6 +215,9 @@ func (a *App) handleDeleteDictionaryBatch(w http.ResponseWriter, r *http.Request
 		log.Printf("批量删除词库记录失败: %v", err)
 		writeError(w, http.StatusInternalServerError, "删除失败")
 		return
+	}
+	if _, err := a.words.DeleteByWordKeys(r.Context(), keys); err != nil {
+		log.Printf("批量删除用户单词失败: %v", err)
 	}
 	writeJSON(w, http.StatusOK, map[string]int64{"deleted": affected})
 }

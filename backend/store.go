@@ -290,12 +290,19 @@ func (r *wordRepo) DueFlashcards(ctx context.Context, userID, limit int, now tim
 	return scanWordRows(rows)
 }
 
-// ListPage 按 sort 指定的顺序取一页单词；sort 只能是 wordOrderBy 认识的白名单值
-func (r *wordRepo) ListPage(ctx context.Context, userID int, archived bool, sort string, limit, offset int) ([]Word, error) {
+// ListPage 按 sort 指定的顺序取一页单词；sort 只能是 wordOrderBy 认识的白名单值。
+// keyword / status 通过 senseFilterWhere 下沉到数据库做模糊匹配与释义状态过滤。
+func (r *wordRepo) ListPage(ctx context.Context, userID int, archived bool, keyword, status, sort string, limit, offset int) ([]Word, error) {
+	conds, args := senseFilterWhere(keyword, status)
+	if conds != "" {
+		conds = " AND " + conds
+	}
+	args = append([]interface{}{userID, archived}, args...)
+	args = append(args, limit, offset)
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT `+wordColumns+` FROM words WHERE user_id = ? AND archived = ?
-		 ORDER BY `+wordOrderBy(sort)+` LIMIT ? OFFSET ?`,
-		userID, archived, limit, offset,
+		`SELECT `+wordColumns+` FROM words WHERE user_id = ? AND archived = ?`+conds+
+			` ORDER BY `+wordOrderBy(sort)+` LIMIT ? OFFSET ?`,
+		args...,
 	)
 	if err != nil {
 		return nil, err
@@ -303,14 +310,56 @@ func (r *wordRepo) ListPage(ctx context.Context, userID int, archived bool, sort
 	return scanWordRows(rows)
 }
 
-func (r *wordRepo) CountByUser(ctx context.Context, userID int, archived bool) (int, error) {
+func (r *wordRepo) CountByUser(ctx context.Context, userID int, archived bool, keyword, status string) (int, error) {
+	conds, args := senseFilterWhere(keyword, status)
+	if conds != "" {
+		conds = " AND " + conds
+	}
+	args = append([]interface{}{userID, archived}, args...)
 	var count int
-	err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM words WHERE user_id = ? AND archived = ?`, userID, archived).Scan(&count)
+	err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM words WHERE user_id = ? AND archived = ?`+conds, args...).Scan(&count)
 	return count, err
+}
+
+// ResetReviewCounts 把某用户所有单词的背诵次数重置为 1；只动 review_count，不碰 SRS 排期字段。
+func (r *wordRepo) ResetReviewCounts(ctx context.Context, userID int) (int64, error) {
+	res, err := r.db.ExecContext(ctx, `UPDATE words SET review_count = 1 WHERE user_id = ?`, userID)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }
 
 func (r *wordRepo) Delete(ctx context.Context, id, userID int) (int64, error) {
 	res, err := r.db.ExecContext(ctx, `DELETE FROM words WHERE id = ? AND user_id = ?`, id, userID)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// DeleteByWordKey 删除所有用户里 word_key 匹配的记录。管理侧删除词库缓存时一并调用，
+// 让用户已保存的同名单词也从各自单词表里移除。
+func (r *wordRepo) DeleteByWordKey(ctx context.Context, wordKey string) (int64, error) {
+	res, err := r.db.ExecContext(ctx, `DELETE FROM words WHERE word_key = ?`, wordKey)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// DeleteByWordKeys 批量删除所有用户里 word_key 命中任一给定值的记录；wordKeys 为空时直接返回。
+// 占位符按数量生成，wordKey 本身仍走参数绑定，不拼接任何用户输入。
+func (r *wordRepo) DeleteByWordKeys(ctx context.Context, wordKeys []string) (int64, error) {
+	if len(wordKeys) == 0 {
+		return 0, nil
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(wordKeys)), ",")
+	args := make([]interface{}, len(wordKeys))
+	for i, k := range wordKeys {
+		args[i] = k
+	}
+	res, err := r.db.ExecContext(ctx, `DELETE FROM words WHERE word_key IN (`+placeholders+`)`, args...)
 	if err != nil {
 		return 0, err
 	}
@@ -631,10 +680,12 @@ func (r *dictionaryRepo) List(ctx context.Context) ([]dictionaryEntry, error) {
 	return scanDictRows(rows)
 }
 
-// dictFilterWhere 根据关键词和释义状态拼出 WHERE 子句（不含 WHERE 关键字）及对应参数。
-// keyword、status 都为空时返回空子句和空参数，表示不过滤。status 取值：
+// senseFilterWhere 根据关键词和释义状态拼出过滤条件（不含 WHERE 关键字）及对应参数。
+// keyword、status 都为空时返回空字符串和空参数，表示不过滤。words 与 word_dictionary 两表的
+// word_key / senses 列名一致，因此共用同一份过滤逻辑；调用方自行决定前置 " WHERE "（作为首个条件）
+// 还是 " AND "（追加到已有 WHERE 之后）。status 取值：
 // "no_definition"（暂无释义）/ "has_definition"（已有释义）/ 其它或空（不过滤）。
-func dictFilterWhere(keyword, status string) (string, []interface{}) {
+func senseFilterWhere(keyword, status string) (string, []interface{}) {
 	conds := []string{}
 	args := []interface{}{}
 	if keyword != "" {
@@ -653,13 +704,17 @@ func dictFilterWhere(keyword, status string) (string, []interface{}) {
 	if len(conds) == 0 {
 		return "", nil
 	}
-	return " WHERE " + strings.Join(conds, " AND "), args
+	return strings.Join(conds, " AND "), args
 }
 
 // ListPage 取一页词库记录。keyword 非空时同时匹配单词和释义（释义通过 JSON_SEARCH
 // 在 senses JSON 数组里查找），status 按释义有无过滤；两者都下沉到数据库，前端不再本地过滤。
 func (r *dictionaryRepo) ListPage(ctx context.Context, keyword, status string, limit, offset int) ([]dictionaryEntry, error) {
-	where, args := dictFilterWhere(keyword, status)
+	conds, args := senseFilterWhere(keyword, status)
+	where := ""
+	if conds != "" {
+		where = " WHERE " + conds
+	}
 	args = append(args, limit, offset)
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT `+dictColumns+` FROM word_dictionary`+where+
@@ -673,7 +728,11 @@ func (r *dictionaryRepo) ListPage(ctx context.Context, keyword, status string, l
 }
 
 func (r *dictionaryRepo) Count(ctx context.Context, keyword, status string) (int, error) {
-	where, args := dictFilterWhere(keyword, status)
+	conds, args := senseFilterWhere(keyword, status)
+	where := ""
+	if conds != "" {
+		where = " WHERE " + conds
+	}
 	var count int
 	err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM word_dictionary`+where, args...).Scan(&count)
 	return count, err

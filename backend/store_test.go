@@ -71,6 +71,41 @@ func TestLikeContainsWrapsEscapedKeyword(t *testing.T) {
 	}
 }
 
+func TestSenseFilterWhere(t *testing.T) {
+	// 都为空 → 不过滤
+	if conds, args := senseFilterWhere("", ""); conds != "" || args != nil {
+		t.Fatalf("senseFilterWhere(\"\", \"\") = (%q, %v), want (\"\", nil)", conds, args)
+	}
+
+	// 仅 keyword → 同时匹配 word_key 与释义，两个占位符
+	conds, args := senseFilterWhere("apple", "")
+	if !strings.Contains(conds, "word_key LIKE ?") || !strings.Contains(conds, "JSON_SEARCH") {
+		t.Fatalf("keyword filter missing LIKE/JSON_SEARCH: %q", conds)
+	}
+	if len(args) != 2 {
+		t.Fatalf("keyword filter args = %d, want 2", len(args))
+	}
+
+	// 仅 status → 无占位符
+	if conds, args := senseFilterWhere("", "no_definition"); !strings.Contains(conds, "JSON_LENGTH(senses) = 0") || len(args) != 0 {
+		t.Fatalf("no_definition filter = (%q, %v)", conds, args)
+	}
+	if conds, args := senseFilterWhere("", "has_definition"); !strings.Contains(conds, "JSON_LENGTH(senses) > 0") || len(args) != 0 {
+		t.Fatalf("has_definition filter = (%q, %v)", conds, args)
+	}
+
+	// 非法 status → 视为不过滤
+	if conds, _ := senseFilterWhere("", "bogus"); conds != "" {
+		t.Fatalf("bogus status should not filter, got %q", conds)
+	}
+
+	// keyword + status → 两个条件用 AND 连接，参数只有 keyword 的两个
+	conds, args = senseFilterWhere("apple", "no_definition")
+	if !strings.Contains(conds, " AND ") || len(args) != 2 {
+		t.Fatalf("combined filter = (%q, %v)", conds, args)
+	}
+}
+
 func TestNullTimePtr(t *testing.T) {
 	if got := nullTimePtr(sql.NullTime{}); got != nil {
 		t.Fatalf("expected nil for NULL time, got %v", got)

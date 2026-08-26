@@ -35,6 +35,29 @@ func TestRandomTokenIsHexAndUnique(t *testing.T) {
 	}
 }
 
+func TestBearerToken(t *testing.T) {
+	cases := []struct {
+		header string
+		want   string
+	}{
+		{"", ""},
+		{"Bearer abc123", "abc123"},
+		{"bearer abc123", ""}, // 前缀大小写必须精确
+		{"Bearer ", ""},
+		{"Basic abc123", ""},
+		{"Bearer  abc  ", "abc"}, // token 前后空白修剪
+	}
+	for _, c := range cases {
+		req := httptest.NewRequest("GET", "/api/me", nil)
+		if c.header != "" {
+			req.Header.Set("Authorization", c.header)
+		}
+		if got := bearerToken(req); got != c.want {
+			t.Fatalf("bearerToken(%q) = %q, want %q", c.header, got, c.want)
+		}
+	}
+}
+
 func TestHandleLoginSuccess(t *testing.T) {
 	app, users, sessions := newTestApp()
 	hash, _ := bcrypt.GenerateFromPassword([]byte("secret123"), bcrypt.DefaultCost)
@@ -53,8 +76,11 @@ func TestHandleLoginSuccess(t *testing.T) {
 	if len(sessions.byToken) != 1 {
 		t.Fatalf("expected exactly one session to be created, got %d", len(sessions.byToken))
 	}
-	if setCookie := rec.Header().Get("Set-Cookie"); !strings.Contains(setCookie, sessionCookieName) {
-		t.Fatalf("expected session cookie to be set, got %q", setCookie)
+	if setCookie := rec.Header().Get("Set-Cookie"); setCookie != "" {
+		t.Fatalf("expected no Set-Cookie header after switching to Bearer, got %q", setCookie)
+	}
+	if !strings.Contains(rec.Body.String(), `"token":"`) {
+		t.Fatalf("expected login response to carry a token, got %s", rec.Body.String())
 	}
 }
 
@@ -133,7 +159,7 @@ func TestHandleChangePasswordClearsOtherSessions(t *testing.T) {
 	sessions.byToken["tokenB"] = sessionRecord{userID: u.ID, expiresAt: time.Now().Add(time.Hour)}
 
 	req := httptest.NewRequest("PUT", "/api/me/password", strings.NewReader(`{"old_password":"old12345","new_password":"newpass456"}`))
-	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "tokenA"})
+	req.Header.Set("Authorization", "Bearer tokenA")
 	req = req.WithContext(context.WithValue(req.Context(), userContextKey, &u))
 	rec := httptest.NewRecorder()
 
@@ -200,7 +226,7 @@ func TestHandleResetUserPasswordSuccessClearsSessions(t *testing.T) {
 	}
 }
 
-func TestRequireAuthNoCookie(t *testing.T) {
+func TestRequireAuthNoHeader(t *testing.T) {
 	app, _, _ := newTestApp()
 	handler := app.requireAuth(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatalf("next should not be called")
@@ -223,7 +249,7 @@ func TestRequireAuthExpiredSession(t *testing.T) {
 		t.Fatalf("next should not be called")
 	})
 	req := httptest.NewRequest("GET", "/api/me", nil)
-	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "expired"})
+	req.Header.Set("Authorization", "Bearer expired")
 	rec := httptest.NewRecorder()
 	handler(rec, req)
 	if rec.Code != http.StatusUnauthorized {
@@ -246,7 +272,7 @@ func TestRequireAuthValidSessionPassesThrough(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 	req := httptest.NewRequest("GET", "/api/me", nil)
-	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "valid"})
+	req.Header.Set("Authorization", "Bearer valid")
 	rec := httptest.NewRecorder()
 	handler(rec, req)
 	if !called {
@@ -267,7 +293,7 @@ func TestRequireAdminForbidsNonAdmin(t *testing.T) {
 		t.Fatalf("next should not be called for non-admin")
 	})
 	req := httptest.NewRequest("GET", "/api/admin/users", nil)
-	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "valid"})
+	req.Header.Set("Authorization", "Bearer valid")
 	rec := httptest.NewRecorder()
 	handler(rec, req)
 	if rec.Code != http.StatusForbidden {
@@ -287,7 +313,7 @@ func TestRequireAdminAllowsAdmin(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 	req := httptest.NewRequest("GET", "/api/admin/users", nil)
-	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "valid"})
+	req.Header.Set("Authorization", "Bearer valid")
 	rec := httptest.NewRecorder()
 	handler(rec, req)
 	if !called {

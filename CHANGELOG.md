@@ -2,6 +2,20 @@
 
 本项目的版本变更记录，格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [1.12.0] - 2026-08-26
+
+### Added
+- 接口鉴权由 Cookie 改为 Bearer Token：登录返回 `{ token, user }`，前端把 token 存 localStorage 并在每次请求带 `Authorization: Bearer` 头；未登录访问数据接口返回 401
+- 个人中心「重置次数」按钮（放在「修改密码」右侧）：二次确认后调用 `POST /api/words/reset-counts`，把当前用户所有单词的 `review_count` 重置为 1（不动闪卡复习排期）
+
+### Changed
+- 管理侧删除词库单词（单条/批量）时，同步删除所有用户已保存的同名单词
+- 启动迁移新增「清理无释义单词」：删除用户侧 `senses` 为空或为「查询失败」占位、且不在查词中的单词
+
+### Fixed
+- 修复前端仍按每页 100 条请求、未真正生效 1.11.0 声明的 20 条分页的问题
+- 修复管理端「导出 CSV」在 Bearer 鉴权下失效（由 `<a href>` 改为 fetch + Blob 下载）
+
 ## [1.11.0] - 2026-08-25
 
 ### Added

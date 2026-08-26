@@ -1,11 +1,12 @@
 <script setup>
 import { reactive, ref } from 'vue'
-import { ElMessage } from 'element-plus'
-import { apiPut } from '@/api/client'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { apiPut, apiPost } from '@/api/client'
 
 const visible = ref(false)
 const pwForm = reactive({ old_password: '', new_password: '', confirm_password: '' })
 const changingPassword = ref(false)
+const resetting = ref(false)
 
 function resetPwForm() {
   pwForm.old_password = ''
@@ -41,11 +42,36 @@ async function submitChangePassword() {
     changingPassword.value = false
   }
 }
+
+// 重置次数：把当前用户所有单词的背诵次数重置为 1，二次确认后调用后端
+async function resetCounts() {
+  try {
+    await ElMessageBox.confirm('确定将所有单词的背诵次数重置为 1 吗？该操作不可撤销。', '提示', {
+      confirmButtonText: '重置',
+      cancelButtonText: '取消',
+      type: 'warning',
+    })
+  } catch {
+    return
+  }
+  resetting.value = true
+  try {
+    await apiPost('/api/words/reset-counts')
+    ElMessage.success('已重置所有单词的次数')
+  } catch (e) {
+    ElMessage.error(e.message || '重置失败，请重试')
+  } finally {
+    resetting.value = false
+  }
+}
 </script>
 
 <template>
   <div class="card">
-    <el-button type="primary" @click="visible = true">修改密码</el-button>
+    <div class="action-row">
+      <el-button type="primary" @click="visible = true">修改密码</el-button>
+      <el-button type="danger" :loading="resetting" @click="resetCounts">重置次数</el-button>
+    </div>
   </div>
 
   <el-dialog v-model="visible" title="修改密码" width="380px" style="max-width: 92vw" @closed="resetPwForm">
@@ -71,3 +97,11 @@ async function submitChangePassword() {
     </template>
   </el-dialog>
 </template>
+
+<style scoped>
+.action-row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+</style>

@@ -222,7 +222,7 @@ onMounted(() => {
         @load-more="loadMore"
       />
     </div>
-    <div class="footer">v1.11.0</div>
+    <div class="footer">v1.12.0</div>
   </div>
 </template>
 

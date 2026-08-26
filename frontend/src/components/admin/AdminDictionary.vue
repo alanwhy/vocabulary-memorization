@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { apiGet, apiDelete, apiPost } from '@/api/client'
+import { apiGet, apiDelete, apiPost, getToken } from '@/api/client'
 import { usePaginatedList } from '@/composables/usePaginatedList'
 import { useInfiniteScroll } from '@/composables/useInfiniteScroll'
 import { formatTime } from '@/utils/format'
@@ -126,6 +126,39 @@ async function retryDictEntry(d) {
   }
 }
 
+// 导出改为 fetch + Blob 下载：Bearer 鉴权下纯 <a href> 不带 Authorization 头会 401。
+const exporting = ref(false)
+async function exportCSV() {
+  if (exporting.value) return
+  exporting.value = true
+  try {
+    const res = await fetch('/api/admin/dictionary/export', {
+      headers: { Authorization: `Bearer ${getToken()}` },
+    })
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      throw new Error(data.error || '导出失败')
+    }
+    const blob = await res.blob()
+    // 从 Content-Disposition 里取文件名，取不到就兜底 dictionary.csv
+    const disposition = res.headers.get('Content-Disposition') || ''
+    const match = disposition.match(/filename="?([^";]+)"?/i)
+    const filename = match ? match[1] : 'dictionary.csv'
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+  } catch (e) {
+    ElMessage.error(e.message || '导出失败，请重试')
+  } finally {
+    exporting.value = false
+  }
+}
+
 onMounted(reset)
 </script>
 
@@ -133,7 +166,7 @@ onMounted(reset)
   <h2>词库管理 <span class="total-count">共 {{ totalAll }} 个单词</span></h2>
   <div class="card">
     <div class="toolbar">
-      <a class="export-btn" href="/api/admin/dictionary/export">导出 CSV</a>
+      <a class="export-btn" href="#" @click.prevent="exportCSV">{{ exporting ? '导出中…' : '导出 CSV' }}</a>
       <input type="text" v-model="dictFilter" placeholder="按单词或释义模糊搜索" />
       <select v-model="statusFilter" class="status-filter" aria-label="按释义状态筛选">
         <option value="">全部</option>

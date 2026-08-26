@@ -1,6 +1,6 @@
 import { ref } from 'vue'
 
-export const PAGE_SIZE = 100
+export const PAGE_SIZE = 20
 
 // 后端分页列表的共享状态机，供单词列表、归档列表、后台词库表复用。
 // fetchPage(page, limit) 需要返回后端的分页信封 { items, total, has_more }。
