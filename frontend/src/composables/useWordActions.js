@@ -47,5 +47,19 @@ export function useWordActions(list, { onRemoved } = {}) {
     }
   }
 
-  return { archiveWord, unarchiveWord, deleteWord }
+  // 对「无释义 / 查询失败 / 拼写错误」的词重新触发一次查词。
+  // 成功就地把该词标成查询中、清掉错误占位，返回 true 让调用方重启轮询。
+  async function retryWord(w) {
+    try {
+      await apiPost(`/api/words/${w.id}/retry`)
+      w.translating = true
+      w.senses = (w.senses || []).filter((s) => s.pos !== 'error')
+      return true
+    } catch {
+      ElMessage.error('重新查询失败，请重试')
+      return false
+    }
+  }
+
+  return { archiveWord, unarchiveWord, deleteWord, retryWord }
 }

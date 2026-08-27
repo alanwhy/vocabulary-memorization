@@ -67,3 +67,46 @@ func TestParseSensesSkipsMissingEnrichment(t *testing.T) {
 		t.Fatalf("旧格式应无强化字段，got %+v", senses[0])
 	}
 }
+
+// TestParseLookupResponseValidObject 覆盖新对象格式（拼写正确）。
+func TestParseLookupResponseValidObject(t *testing.T) {
+	content := `{"valid": true, "senses": [{"pos":"n.","translation":"苹果","phonetic":"/ˈæp(ə)l/","lookalikes":[]}]}`
+	senses, isSpellingError, err := parseLookupResponse(content)
+	if err != nil {
+		t.Fatalf("parseLookupResponse 返回错误: %v", err)
+	}
+	if isSpellingError {
+		t.Fatalf("拼写正确的词不应标记为拼写错误")
+	}
+	if len(senses) != 1 || senses[0].Translation != "苹果" {
+		t.Fatalf("释义解析错误: %+v", senses)
+	}
+}
+
+// TestParseLookupResponseSpellingError 覆盖模型判定拼写错误时返回 {"valid": false}。
+func TestParseLookupResponseSpellingError(t *testing.T) {
+	senses, isSpellingError, err := parseLookupResponse(`{"valid": false}`)
+	if err != nil {
+		t.Fatalf("parseLookupResponse 返回错误: %v", err)
+	}
+	if !isSpellingError {
+		t.Fatalf("valid=false 应标记为拼写错误")
+	}
+	if len(senses) != 0 {
+		t.Fatalf("拼写错误时释义应为空，got %+v", senses)
+	}
+}
+
+// TestParseLookupResponseLegacyArray 覆盖旧数组格式仍能解析（视为拼写正确）。
+func TestParseLookupResponseLegacyArray(t *testing.T) {
+	senses, isSpellingError, err := parseLookupResponse(`[{"pos":"n.","translation":"苹果"}]`)
+	if err != nil {
+		t.Fatalf("parseLookupResponse 返回错误: %v", err)
+	}
+	if isSpellingError {
+		t.Fatalf("旧数组格式应视为拼写正确")
+	}
+	if len(senses) != 1 {
+		t.Fatalf("期望 1 条，got %d", len(senses))
+	}
+}

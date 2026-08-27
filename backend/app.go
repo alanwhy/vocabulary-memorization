@@ -20,6 +20,8 @@ type userStore interface {
 	FindByUsername(ctx context.Context, username string) (User, string, error)
 	FindPasswordHash(ctx context.Context, id int) (string, error)
 	UpdatePasswordHash(ctx context.Context, id int, hash string) (int64, error)
+	SetDisabled(ctx context.Context, id int, disabled bool) (int64, error)
+	Delete(ctx context.Context, id int) (int64, error)
 	RecordLogin(ctx context.Context, id int, now time.Time) error
 	List(ctx context.Context) ([]UserWithStats, error)
 	CountAdmins(ctx context.Context) (int, error)
@@ -45,6 +47,7 @@ type wordStore interface {
 	CountByUser(ctx context.Context, userID int, archived bool, keyword, status string) (int, error)
 	ResetReviewCounts(ctx context.Context, userID int) (int64, error)
 	Delete(ctx context.Context, id, userID int) (int64, error)
+	DeleteByUserID(ctx context.Context, userID int) (int64, error)
 	DeleteByWordKey(ctx context.Context, wordKey string) (int64, error)
 	DeleteByWordKeys(ctx context.Context, wordKeys []string) (int64, error)
 	SetArchived(ctx context.Context, id, userID int, archived bool) (int64, error)

@@ -109,11 +109,16 @@ async function batchDelete() {
 }
 
 // 手动重新查询：针对「暂无释义」的词条，管理员判断可能只是接口超时导致的假阴性时，
-// 主动触发一次查词并写回词库缓存。一次只允许一条在途，避免重复点击。
-const retryingKey = ref('')
+// 主动触发一次查词并写回词库缓存。用 Set 记录在途词条，允许多条同时重查、互不阻塞，
+// 只对同一条做去重，避免重复点击同一行。
+const retryingKeys = ref(new Set())
+function isRetrying(d) {
+  return retryingKeys.value.has(d.word_key)
+}
 async function retryDictEntry(d) {
-  if (retryingKey.value) return
-  retryingKey.value = d.word_key
+  if (isRetrying(d)) return
+  retryingKeys.value.add(d.word_key)
+  retryingKeys.value = new Set(retryingKeys.value)
   try {
     await apiPost('/api/admin/dictionary/retry', { word_key: d.word_key })
     ElMessage.success(`已重新查询「${d.display_word}」`)
@@ -122,7 +127,8 @@ async function retryDictEntry(d) {
   } catch (e) {
     ElMessage.error(e.message || '重新查询失败，请重试')
   } finally {
-    retryingKey.value = ''
+    retryingKeys.value.delete(d.word_key)
+    retryingKeys.value = new Set(retryingKeys.value)
   }
 }
 
@@ -177,55 +183,57 @@ onMounted(reset)
         批量删除{{ hasSelection ? `（${selectedKeys.size}）` : '' }}
       </button>
     </div>
-    <table style="margin-top: 12px">
-      <thead>
-        <tr>
-          <th class="check-col">
-            <input
-              type="checkbox"
-              :checked="allChecked"
-              :indeterminate.prop="!allChecked && hasSelection"
-              @change="toggleAll($event.target.checked)"
-            />
-          </th>
-          <th>单词</th>
-          <th>释义</th>
-          <th>出现次数</th>
-          <th>最后更新时间</th>
-          <th>操作</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr v-for="d in dictEntries" :key="d.word_key">
-          <td class="check-col">
-            <input
-              type="checkbox"
-              :checked="isSelected(d)"
-              @change="toggleOne(d, $event.target.checked)"
-            />
-          </td>
-          <td>{{ d.display_word }}</td>
-          <td>
-            <div class="senses" v-if="d.senses && d.senses.length">
-              <div class="phonetic" v-if="d.senses[0].phonetic">{{ d.senses[0].phonetic }}</div>
-              <div class="sense" v-for="(s, idx) in d.senses" :key="idx">
-                <span class="pos" v-if="s.pos">{{ s.pos }}</span>
-                <span class="translation">{{ s.translation }}</span>
+    <div class="table-scroll" style="margin-top: 12px">
+      <table>
+        <thead>
+          <tr>
+            <th class="check-col">
+              <input
+                type="checkbox"
+                :checked="allChecked"
+                :indeterminate.prop="!allChecked && hasSelection"
+                @change="toggleAll($event.target.checked)"
+              />
+            </th>
+            <th>单词</th>
+            <th>释义</th>
+            <th>出现次数</th>
+            <th>最后更新时间</th>
+            <th class="op-col">操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="d in dictEntries" :key="d.word_key">
+            <td class="check-col">
+              <input
+                type="checkbox"
+                :checked="isSelected(d)"
+                @change="toggleOne(d, $event.target.checked)"
+              />
+            </td>
+            <td>{{ d.display_word }}</td>
+            <td>
+              <div class="senses" v-if="d.senses && d.senses.length">
+                <div class="phonetic" v-if="d.senses[0].phonetic">{{ d.senses[0].phonetic }}</div>
+                <div class="sense" v-for="(s, idx) in d.senses" :key="idx">
+                  <span class="pos" v-if="s.pos">{{ s.pos }}</span>
+                  <span class="translation">{{ s.translation }}</span>
+                </div>
               </div>
-            </div>
-            <span v-else>暂无释义</span>
-          </td>
-          <td><span :class="countBadgeClass(d.occurrence_count)">×{{ d.occurrence_count }}</span></td>
-          <td>{{ formatTime(d.last_updated_at) }}</td>
-          <td>
-            <button class="link-btn" v-if="!d.senses || !d.senses.length" @click="retryDictEntry(d)">
-              {{ retryingKey === d.word_key ? '查询中…' : '重新查询' }}
-            </button>
-            <button class="link-btn danger" @click="deleteDictEntry(d)">删除</button>
-          </td>
-        </tr>
-      </tbody>
-    </table>
+              <span v-else>暂无释义</span>
+            </td>
+            <td><span :class="countBadgeClass(d.occurrence_count)">×{{ d.occurrence_count }}</span></td>
+            <td>{{ formatTime(d.last_updated_at) }}</td>
+            <td class="op-col">
+              <button class="link-btn" v-if="!d.senses || !d.senses.length" @click="retryDictEntry(d)">
+                {{ isRetrying(d) ? '查询中…' : '重新查询' }}
+              </button>
+              <button class="link-btn danger" @click="deleteDictEntry(d)">删除</button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
     <div v-if="hasMore" ref="sentinelRef" class="sentinel"></div>
     <p class="msg" v-if="errorMsg">{{ errorMsg }}</p>
     <p class="msg" v-else-if="loading">加载中…</p>

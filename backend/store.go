@@ -73,9 +73,9 @@ func (r *userRepo) FindByUsername(ctx context.Context, username string) (User, s
 	var hash string
 	var lastLogin sql.NullTime
 	err := r.db.QueryRowContext(ctx,
-		`SELECT id, username, password_hash, is_admin, created_at, last_login_at FROM users WHERE username = ?`,
+		`SELECT id, username, password_hash, is_admin, disabled, created_at, last_login_at FROM users WHERE username = ?`,
 		username,
-	).Scan(&u.ID, &u.Username, &hash, &u.IsAdmin, &u.CreatedAt, &lastLogin)
+	).Scan(&u.ID, &u.Username, &hash, &u.IsAdmin, &u.Disabled, &u.CreatedAt, &lastLogin)
 	u.LastLoginAt = nullTimePtr(lastLogin)
 	return u, hash, err
 }
@@ -100,13 +100,31 @@ func (r *userRepo) UpdatePasswordHash(ctx context.Context, id int, hash string) 
 	return res.RowsAffected()
 }
 
+// SetDisabled 把用户标记为禁用/启用，返回受影响行数（0 表示用户不存在）
+func (r *userRepo) SetDisabled(ctx context.Context, id int, disabled bool) (int64, error) {
+	res, err := r.db.ExecContext(ctx, `UPDATE users SET disabled = ? WHERE id = ?`, disabled, id)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// Delete 删除用户；会话与单词由调用方在删除前清理（老库没有外键级联，不能依赖数据库）。
+func (r *userRepo) Delete(ctx context.Context, id int) (int64, error) {
+	res, err := r.db.ExecContext(ctx, `DELETE FROM users WHERE id = ?`, id)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 // List 管理员用户列表：LEFT JOIN 一次性把每个用户录入的单词数（含已归档）聚合出来，
 // 避免在 handler 里对每个用户各发一条 COUNT 查询
 func (r *userRepo) List(ctx context.Context) ([]UserWithStats, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT u.id, u.username, u.is_admin, u.created_at, u.last_login_at, COUNT(w.id)
+		`SELECT u.id, u.username, u.is_admin, u.disabled, u.created_at, u.last_login_at, COUNT(w.id)
 		 FROM users u LEFT JOIN words w ON w.user_id = u.id
-		 GROUP BY u.id, u.username, u.is_admin, u.created_at, u.last_login_at
+		 GROUP BY u.id, u.username, u.is_admin, u.disabled, u.created_at, u.last_login_at
 		 ORDER BY u.id`)
 	if err != nil {
 		return nil, err
@@ -117,7 +135,7 @@ func (r *userRepo) List(ctx context.Context) ([]UserWithStats, error) {
 	for rows.Next() {
 		var u UserWithStats
 		var lastLogin sql.NullTime
-		if err := rows.Scan(&u.ID, &u.Username, &u.IsAdmin, &u.CreatedAt, &lastLogin, &u.WordCount); err != nil {
+		if err := rows.Scan(&u.ID, &u.Username, &u.IsAdmin, &u.Disabled, &u.CreatedAt, &lastLogin, &u.WordCount); err != nil {
 			return nil, err
 		}
 		u.LastLoginAt = nullTimePtr(lastLogin)
@@ -155,11 +173,11 @@ func (r *sessionRepo) FindWithUser(ctx context.Context, token string) (User, tim
 	var expiresAt time.Time
 	var lastLogin sql.NullTime
 	err := r.db.QueryRowContext(ctx,
-		`SELECT u.id, u.username, u.is_admin, u.created_at, u.last_login_at, s.expires_at
+		`SELECT u.id, u.username, u.is_admin, u.disabled, u.created_at, u.last_login_at, s.expires_at
 		 FROM sessions s JOIN users u ON u.id = s.user_id
 		 WHERE s.token = ?`,
 		token,
-	).Scan(&u.ID, &u.Username, &u.IsAdmin, &u.CreatedAt, &lastLogin, &expiresAt)
+	).Scan(&u.ID, &u.Username, &u.IsAdmin, &u.Disabled, &u.CreatedAt, &lastLogin, &expiresAt)
 	u.LastLoginAt = nullTimePtr(lastLogin)
 	return u, expiresAt, err
 }
@@ -332,6 +350,15 @@ func (r *wordRepo) ResetReviewCounts(ctx context.Context, userID int) (int64, er
 
 func (r *wordRepo) Delete(ctx context.Context, id, userID int) (int64, error) {
 	res, err := r.db.ExecContext(ctx, `DELETE FROM words WHERE id = ? AND user_id = ?`, id, userID)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// DeleteByUserID 删除某用户的全部单词，管理侧删除用户时调用。
+func (r *wordRepo) DeleteByUserID(ctx context.Context, userID int) (int64, error) {
+	res, err := r.db.ExecContext(ctx, `DELETE FROM words WHERE user_id = ?`, userID)
 	if err != nil {
 		return 0, err
 	}

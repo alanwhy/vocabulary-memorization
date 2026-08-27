@@ -323,3 +323,79 @@ func TestRequireAdminAllowsAdmin(t *testing.T) {
 		t.Fatalf("expected 200, got %d", rec.Code)
 	}
 }
+
+func TestHandleLoginRejectsDisabledUser(t *testing.T) {
+	app, users, sessions := newTestApp()
+	hash, _ := bcrypt.GenerateFromPassword([]byte("secret123"), bcrypt.DefaultCost)
+	u := users.addUser("alice", string(hash), false)
+	u.Disabled = true
+	users.usersByName["alice"] = u
+	sessions.usersByID[u.ID] = u
+
+	req := httptest.NewRequest("POST", "/api/login", strings.NewReader(`{"username":"alice","password":"secret123"}`))
+	req.RemoteAddr = "1.2.3.4:5555"
+	rec := httptest.NewRecorder()
+
+	app.handleLogin(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if len(sessions.byToken) != 0 {
+		t.Fatalf("禁用用户登录不应创建会话")
+	}
+}
+
+func TestRequireAuthRejectsDisabledSession(t *testing.T) {
+	app, users, sessions := newTestApp()
+	u := users.addUser("grace", "hash", false)
+	u.Disabled = true
+	sessions.usersByID[u.ID] = u
+	sessions.byToken["valid"] = sessionRecord{userID: u.ID, expiresAt: time.Now().Add(time.Hour)}
+
+	handler := app.requireAuth(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("next should not be called for disabled user")
+	})
+	req := httptest.NewRequest("GET", "/api/me", nil)
+	req.Header.Set("Authorization", "Bearer valid")
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", rec.Code)
+	}
+	if len(sessions.byToken) != 0 {
+		t.Fatalf("禁用用户的会话应被清除")
+	}
+}
+
+func TestHandleDisableUserCannotDisableSelf(t *testing.T) {
+	app, users, _ := newTestApp()
+	u := users.addUser("admin", "hash", true)
+
+	req := httptest.NewRequest("POST", "/api/admin/users/"+strconv.Itoa(u.ID)+"/disable", strings.NewReader(`{"disabled":true}`))
+	req.SetPathValue("id", strconv.Itoa(u.ID))
+	req = req.WithContext(context.WithValue(req.Context(), userContextKey, &u))
+	rec := httptest.NewRecorder()
+
+	app.handleDisableUser(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleDeleteUserCannotDeleteSelf(t *testing.T) {
+	app, users, _ := newTestApp()
+	u := users.addUser("admin", "hash", true)
+
+	req := httptest.NewRequest("DELETE", "/api/admin/users/"+strconv.Itoa(u.ID), nil)
+	req.SetPathValue("id", strconv.Itoa(u.ID))
+	req = req.WithContext(context.WithValue(req.Context(), userContextKey, &u))
+	rec := httptest.NewRecorder()
+
+	app.handleDeleteUser(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+}

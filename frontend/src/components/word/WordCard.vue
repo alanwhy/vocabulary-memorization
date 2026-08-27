@@ -9,13 +9,24 @@ const props = defineProps({
   word: { type: Object, required: true },
   mode: { type: String, default: 'active' }, // 'active' | 'archived'
 })
-defineEmits(['archive', 'unarchive', 'delete'])
+defineEmits(['archive', 'unarchive', 'delete', 'retry'])
 
 const vocab = useVocabularyIndex()
 onMounted(vocab.ensure)
 
+// 错误态：释义里含占位性质的 sense（新版拼写错误/查询失败用 pos === 'error'，旧版查询失败用 pos === '系统提示'）。
+// 前端据此显示重试而非归档，且重试按钮对所有用户（含管理员）都生效——判断只依赖单词状态，不依赖身份。
+const errorSenses = computed(() =>
+  (props.word.senses || []).filter((s) => s.pos === 'error' || s.pos === '系统提示'),
+)
+const hasError = computed(() => errorSenses.value.length > 0)
+// 正常释义：排除占位 sense 后的有效词性释义
+const validSenses = computed(() =>
+  (props.word.senses || []).filter((s) => s.pos !== 'error' && s.pos !== '系统提示'),
+)
+
 // 词级强化信息（音标/词根词缀/近反义/形近词）平铺在每条 Sense 上重复出现，统一从第一条取
-const first = computed(() => (props.word.senses && props.word.senses[0]) || {})
+const first = computed(() => validSenses.value[0] || {})
 const phonetic = computed(() => first.value.phonetic || '')
 const rootAffix = computed(() => {
   const parts = [first.value.root, first.value.affix].filter(Boolean)
@@ -48,6 +59,7 @@ function exampleTokens(s) {
     <div class="word-top">
       <div class="word-line">
         <span class="word">{{ word.display_word }}</span>
+        <span class="translating-status" v-if="word.translating">查询中...</span>
         <span class="phonetic" v-if="phonetic">{{ phonetic }}</span>
       </div>
       <div class="word-meta">
@@ -56,8 +68,17 @@ function exampleTokens(s) {
       </div>
     </div>
     <div class="word-body">
-      <div class="senses" v-if="word.senses && word.senses.length">
-        <div class="sense" v-for="(s, idx) in word.senses" :key="idx">
+      <div class="senses" v-if="word.translating">
+        <div class="sense"><span class="translation pending">查词中...</span></div>
+      </div>
+      <div class="senses" v-else-if="hasError">
+        <div class="sense" v-for="(s, idx) in errorSenses" :key="idx">
+          <span class="error-label">error：</span>
+          <span class="translation error">{{ s.translation }}</span>
+        </div>
+      </div>
+      <div class="senses" v-else-if="validSenses.length">
+        <div class="sense" v-for="(s, idx) in validSenses" :key="idx">
           <span class="pos" v-if="s.pos">{{ s.pos }}</span>
           <span class="translation">{{ s.translation }}</span>
           <span class="example" v-if="s.example || s.example_translation">
@@ -68,13 +89,10 @@ function exampleTokens(s) {
           </span>
         </div>
       </div>
-      <div class="senses" v-else-if="word.translating">
-        <div class="sense"><span class="translation pending">查词中...</span></div>
-      </div>
       <div class="senses" v-else>
         <div class="sense"><span class="translation">暂无释义</span></div>
       </div>
-      <div class="enrich" v-if="hasEnrichment">
+      <div class="enrich" v-if="!word.translating && hasEnrichment">
         <span v-if="rootAffix">
           <span class="enrich-label">词根词缀：</span>{{ rootAffix }}
         </span>
@@ -84,7 +102,18 @@ function exampleTokens(s) {
       </div>
     </div>
     <div class="word-actions">
-      <button v-if="mode === 'active'" class="action-btn primary" @click="$emit('archive', word)">归档</button>
+      <template v-if="mode === 'active'">
+        <button
+          v-if="!word.translating && !hasError && validSenses.length"
+          class="action-btn primary"
+          @click="$emit('archive', word)"
+        >
+          归档
+        </button>
+        <button v-else-if="!word.translating" class="action-btn primary" @click="$emit('retry', word)">
+          重试
+        </button>
+      </template>
       <button v-else class="action-btn primary" @click="$emit('unarchive', word)">取消归档</button>
       <button class="action-btn danger" @click="$emit('delete', word)">删除</button>
     </div>
@@ -123,6 +152,12 @@ function exampleTokens(s) {
   font-size: 13px;
   color: var(--muted);
 }
+.translating-status {
+  font-size: 12px;
+  color: var(--muted);
+  font-style: italic;
+  white-space: nowrap;
+}
 .word-body {
   display: flex;
   flex-direction: column;
@@ -156,6 +191,13 @@ function exampleTokens(s) {
 .sense .translation.pending {
   color: var(--muted);
   font-style: italic;
+}
+.sense .translation.error {
+  color: var(--danger);
+}
+.error-label {
+  font-weight: 600;
+  color: var(--danger);
 }
 .sense .example {
   display: flex;

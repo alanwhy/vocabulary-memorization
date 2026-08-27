@@ -9,6 +9,7 @@
   --accent: #409eff;
   --accent-soft: #ecf5ff;
   --danger: #c65b5b;
+  --danger-soft: #fbeaea;
   --el-color-primary: var(--accent);
 
   /* 出现次数阶梯配色（档位见 utils/reviewLevel.js，边界 1/3/5/7/9/11）：
@@ -37,6 +38,7 @@ html.dark {
   --accent: #409eff;
   --accent-soft: #18222b;
   --danger: #e08080;
+  --danger-soft: #3a2424;
 
   /* 深色下保持同一串色相（绿→黄→橙→红），但底色压暗、前景提亮，避免浅底在暗背景上发白刺眼 */
   --count-1-bg: #1b2c22;

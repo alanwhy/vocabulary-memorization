@@ -117,28 +117,10 @@ func migrateSchema() {
 	migrateWordsUserArchivedIndex()
 	migrateWordsSRSColumns()
 	migrateUsersLastLoginColumn()
+	migrateUsersDisabledColumn()
 	mergeHistoricalWordSenses()
 	backfillWordDictionary()
 	migrateTimestampsToCST()
-	deleteWordsWithoutDefinition()
-}
-
-// deleteWordsWithoutDefinition 清理用户单词表里「没释义」的记录：查词彻底失败写入的
-// 「查询失败」占位（见 main.go 的 failedSenses），以及历史遗留的空 senses。translating=1
-// 的仍在查词流程里，由 resumeStuckTranslations 恢复，不在这里动。DELETE 天然幂等，
-// 首次清理后没有匹配行即为空操作，可放心每次启动都跑。
-func deleteWordsWithoutDefinition() {
-	res, err := db.Exec(`DELETE FROM words WHERE translating = 0 AND (
-		senses IS NULL
-		OR JSON_LENGTH(senses) = 0
-		OR JSON_SEARCH(senses, 'one', '查询失败%', NULL, '$.translation') IS NOT NULL
-	)`)
-	if err != nil {
-		log.Fatalf("清理无释义单词失败: %v", err)
-	}
-	if n, _ := res.RowsAffected(); n > 0 {
-		log.Printf("已清理 %d 条无释义单词", n)
-	}
 }
 
 // migrateUsersLastLoginColumn 给 users 表补 last_login_at 列，记录最后一次成功登录的时间；
@@ -148,6 +130,15 @@ func migrateUsersLastLoginColumn() {
 		return
 	}
 	mustExec(`ALTER TABLE users ADD COLUMN last_login_at DATETIME NULL`)
+}
+
+// migrateUsersDisabledColumn 给 users 表补 disabled 列，标记账号是否被管理员禁用。
+// 历史用户默认 0（正常），禁用后登录被拒、已有会话立即失效。
+func migrateUsersDisabledColumn() {
+	if columnExists("users", "disabled") {
+		return
+	}
+	mustExec(`ALTER TABLE users ADD COLUMN disabled TINYINT(1) NOT NULL DEFAULT 0`)
 }
 
 // migrateWordsUserArchivedIndex 给 words 表补 (user_id, archived) 索引，

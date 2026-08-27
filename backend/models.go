@@ -164,11 +164,13 @@ func applySRSScheduling(intervalDays int, easeFactor float64, rating string) (in
 	return intervalDays, math.Round(easeFactor*100) / 100
 }
 
-// User 对应数据库 users 表的一条记录；LastLoginAt 用指针表示“从未登录过”（数据库里为 NULL）
+// User 对应数据库 users 表的一条记录；LastLoginAt 用指针表示“从未登录过”（数据库里为 NULL）。
+// Disabled 表示账号是否被管理员禁用：禁用后登录被拒、已有会话立即失效。
 type User struct {
 	ID          int        `json:"id"`
 	Username    string     `json:"username"`
 	IsAdmin     bool       `json:"is_admin"`
+	Disabled    bool       `json:"disabled"`
 	CreatedAt   time.Time  `json:"created_at"`
 	LastLoginAt *time.Time `json:"last_login_at"`
 }

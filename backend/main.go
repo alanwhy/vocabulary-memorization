@@ -82,12 +82,15 @@ func main() {
 	mux.HandleFunc("DELETE /api/words/{id}", withTimeout(defaultRequestTimeout)(app.requireAuth(app.handleDeleteWord)))
 	mux.HandleFunc("POST /api/words/{id}/archive", withTimeout(defaultRequestTimeout)(app.requireAuth(app.handleArchiveWord)))
 	mux.HandleFunc("POST /api/words/{id}/unarchive", withTimeout(defaultRequestTimeout)(app.requireAuth(app.handleUnarchiveWord)))
+	mux.HandleFunc("POST /api/words/{id}/retry", withTimeout(defaultRequestTimeout)(app.requireAuth(app.handleRetryWord)))
 	mux.HandleFunc("GET /api/flashcards/queue", withTimeout(defaultRequestTimeout)(app.requireAuth(app.handleFlashcardQueue)))
 	mux.HandleFunc("POST /api/flashcards/review", withTimeout(defaultRequestTimeout)(app.requireAuth(app.handleFlashcardReview)))
 
 	mux.HandleFunc("POST /api/admin/users", withTimeout(defaultRequestTimeout)(app.requireAdmin(app.handleCreateUser)))
 	mux.HandleFunc("GET /api/admin/users", withTimeout(defaultRequestTimeout)(app.requireAdmin(app.handleListUsers)))
 	mux.HandleFunc("POST /api/admin/users/{id}/reset-password", withTimeout(defaultRequestTimeout)(app.requireAdmin(app.handleResetUserPassword)))
+	mux.HandleFunc("POST /api/admin/users/{id}/disable", withTimeout(defaultRequestTimeout)(app.requireAdmin(app.handleDisableUser)))
+	mux.HandleFunc("DELETE /api/admin/users/{id}", withTimeout(defaultRequestTimeout)(app.requireAdmin(app.handleDeleteUser)))
 	mux.HandleFunc("GET /api/admin/settings", withTimeout(defaultRequestTimeout)(app.requireAdmin(app.handleGetSettings)))
 	mux.HandleFunc("PUT /api/admin/settings", withTimeout(defaultRequestTimeout)(app.requireAdmin(app.handleUpdateSettings)))
 	mux.HandleFunc("GET /api/admin/dictionary", withTimeout(defaultRequestTimeout)(app.requireAdmin(app.handleListDictionary)))
@@ -223,11 +226,15 @@ func (a *App) handleAddWord(w http.ResponseWriter, r *http.Request) {
 // 收紧到 2 次重试（首次 + 2 次 = 共 3 次尝试），缩短用户看到「查询中」的最长时间。
 var translateRetryDelays = []time.Duration{2 * time.Second, 5 * time.Second}
 
-// failedSenses 查词彻底失败后写入用户单词表的占位释义：明确告诉用户需要管理员介入，
-// 而不是留空让前端显示含糊的「暂无释义」或让单词永久停在「查询中」。
+// failedSenses 查词彻底失败后写入用户单词表的占位释义。pos 统一用 "error"，前端据此
+// 区分「错误」与「正常释义」：错误时显示重试按钮而非归档。
 // 注意：它只写回用户个人的 words.senses，绝不写进全局词库缓存 word_dictionary，
 // 否则同一个词会被其它用户命中缓存、永远锁死在错误提示上，无法再被正常重试。
-var failedSenses = []Sense{{Pos: "系统提示", Translation: "查询失败，请管理员重试"}}
+var failedSenses = []Sense{{Pos: "error", Translation: "查询失败，请稍后重试"}}
+
+// spellingErrorSenses 模型判定单词拼写错误时写入的占位释义：提示用户检查拼写。
+// 同样只写用户个人 words，不写全局词库缓存。
+var spellingErrorSenses = []Sense{{Pos: "error", Translation: "请检查单词拼写是否正常"}}
 
 // spawnTranslation 以受信号量限流、可被进程关闭信号取消的方式启动后台查词任务；
 // 信号量获取是阻塞式的（不丢弃），避免单词永久卡在 translating=1 无法自愈。
@@ -311,6 +318,11 @@ func (a *App) translateAndSave(ctx context.Context, wordID int, wordKey string) 
 	for attempt := 0; ; attempt++ {
 		cfg := a.getDeepSeekConfig()
 		result := translateWord(ctx, wordKey, cfg)
+		if result.IsSpellingError {
+			// 拼写错误不是重试能解决的，直接写回拼写错误占位，不进入重试循环
+			a.saveWordSenses(ctx, wordID, wordKey, spellingErrorSenses)
+			return
+		}
 		merged := mergeSensesByPos(result.Senses)
 		if len(merged) > 0 {
 			a.saveWordSenses(ctx, wordID, wordKey, merged)
@@ -635,6 +647,42 @@ func (a *App) setWordArchived(w http.ResponseWriter, r *http.Request, archived b
 		writeError(w, http.StatusNotFound, "单词不存在")
 		return
 	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleRetryWord 用户对「无释义 / 查询失败 / 拼写错误」的单词主动重新触发一次查词。
+// 复用后台查词链路：置 translating=1 并 spawnTranslation，前端随后轮询拿回新结果。
+func (a *App) handleRetryWord(w http.ResponseWriter, r *http.Request) {
+	user := currentUser(r)
+	id, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "无效的 id")
+		return
+	}
+
+	list, err := a.words.FindByIDs(r.Context(), user.ID, []int{id})
+	if err != nil {
+		log.Printf("查询单词失败: %v", err)
+		writeError(w, http.StatusInternalServerError, "查询失败")
+		return
+	}
+	if len(list) == 0 {
+		writeError(w, http.StatusNotFound, "单词不存在")
+		return
+	}
+	wd := list[0]
+	if wd.Translating {
+		// 已在查询中，直接返回，避免重复触发
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	if err := a.words.MarkTranslating(r.Context(), id, time.Now()); err != nil {
+		log.Printf("标记重查状态失败 word=%s id=%d: %v", wd.WordKey, id, err)
+		writeError(w, http.StatusInternalServerError, "重新查询失败")
+		return
+	}
+	a.spawnTranslation(id, wd.WordKey)
 	w.WriteHeader(http.StatusNoContent)
 }
 

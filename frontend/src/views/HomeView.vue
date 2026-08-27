@@ -49,7 +49,7 @@ const stats = ref({ total_words: 0, total_reviews: 0, today_reviews: 0 })
 const hintText = computed(() => submitError.value || listError.value || placeholderHint)
 const hasError = computed(() => !!(submitError.value || listError.value))
 
-const { archiveWord, deleteWord } = useWordActions(list, { onRemoved: dropFromStats })
+const { archiveWord, deleteWord, retryWord } = useWordActions(list, { onRemoved: dropFromStats })
 const { scheduleIfNeeded, stop } = useTranslatingPoll(words, mergeTranslating)
 
 function dropFromStats(w) {
@@ -59,6 +59,12 @@ function dropFromStats(w) {
     total_reviews: Math.max(0, stats.value.total_reviews - w.review_count),
     today_reviews: Math.max(0, (stats.value.today_reviews || 0) - w.review_count),
   }
+}
+
+// 重新查询成功后该词进入「查询中」，重启轮询直到后台把释义写回
+async function handleRetry(w) {
+  const ok = await retryWord(w)
+  if (ok) scheduleIfNeeded()
 }
 
 async function loadStats() {
@@ -171,6 +177,7 @@ onMounted(() => {
   if (auth.isAuthenticated) {
     reload()
     loadStats()
+    nextTick(() => wordInputRef.value?.focus())
   }
 })
 </script>
@@ -181,16 +188,14 @@ onMounted(() => {
     <div v-else>
       <h1>背单词</h1>
       <div class="input-wrap">
-        <input
+        <el-input
           ref="wordInputRef"
-          type="text"
           v-model="inputWord"
           :disabled="submitting"
-          @keyup.enter="submitWord"
           placeholder="输入英文单词，按回车记录"
-          autofocus
+          @keyup.enter="submitWord"
         />
-        <button class="add-btn" :disabled="submitting" @click="submitWord">添加</button>
+        <el-button type="primary" :disabled="submitting" @click="submitWord">添加</el-button>
       </div>
       <p class="hint" :class="{ error: hasError }">{{ hintText }}</p>
 
@@ -219,10 +224,11 @@ onMounted(() => {
         :has-more="hasMore"
         @archive="archiveWord"
         @delete="deleteWord"
+        @retry="handleRetry"
         @load-more="loadMore"
       />
     </div>
-    <div class="footer">v1.12.0</div>
+    <div class="footer">v1.13.0</div>
   </div>
 </template>
 
@@ -231,34 +237,10 @@ onMounted(() => {
   margin-bottom: 8px;
   display: flex;
   gap: 8px;
+  align-items: center;
 }
-input[type='text'] {
-  width: 100%;
-  padding: 14px 16px;
-  font-size: 16px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--card-bg);
-  color: var(--text);
-  outline: none;
-  transition: border-color 0.15s ease;
-}
-input[type='text']:focus {
-  border-color: var(--accent);
-}
-.add-btn {
-  flex-shrink: 0;
-  padding: 0 20px;
-  font-size: 15px;
-  border: none;
-  border-radius: 10px;
-  background: var(--accent);
-  color: #fff;
-  cursor: pointer;
-}
-.add-btn:disabled {
-  opacity: 0.6;
-  cursor: default;
+.input-wrap :deep(.el-input) {
+  flex: 1;
 }
 .hint {
   font-size: 13px;

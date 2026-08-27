@@ -1,8 +1,12 @@
 <script setup>
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { apiGet, apiPost } from '@/api/client'
+import { apiGet, apiPost, apiDelete } from '@/api/client'
+import { useAuthStore } from '@/stores/auth'
 import { formatTime } from '@/utils/format'
+
+const auth = useAuthStore()
+const currentUserId = computed(() => auth.currentUser?.id)
 
 const users = ref([])
 const newUser = reactive({ username: '', password: '', is_admin: false })
@@ -65,34 +69,83 @@ async function createUser() {
   }
 }
 
+async function toggleDisabled(u) {
+  const action = u.disabled ? '启用' : '禁用'
+  try {
+    await ElMessageBox.confirm(`确定${action}用户「${u.username}」吗？`, '提示', {
+      confirmButtonText: action,
+      cancelButtonText: '取消',
+      type: 'warning',
+    })
+  } catch {
+    return
+  }
+  try {
+    await apiPost(`/api/admin/users/${u.id}/disable`, { disabled: !u.disabled })
+    u.disabled = !u.disabled
+    ElMessage.success(`已${action}用户「${u.username}」`)
+  } catch (e) {
+    ElMessage.error(e.message || `${action}失败`)
+  }
+}
+
+async function deleteUser(u) {
+  try {
+    await ElMessageBox.confirm(
+      `确定删除用户「${u.username}」吗？其名下所有单词记录也会一并删除，且不可恢复。`,
+      '提示',
+      { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' },
+    )
+  } catch {
+    return
+  }
+  try {
+    await apiDelete(`/api/admin/users/${u.id}`)
+    users.value = users.value.filter((x) => x.id !== u.id)
+    ElMessage.success(`已删除用户「${u.username}」`)
+  } catch (e) {
+    ElMessage.error(e.message || '删除失败')
+  }
+}
+
 onMounted(loadUsers)
 </script>
 
 <template>
   <h2>用户管理</h2>
   <div class="card">
-    <table>
-      <thead>
-        <tr>
-          <th>用户名</th>
-          <th>角色</th>
-          <th>创建时间</th>
-          <th>最后登录</th>
-          <th>录入单词数</th>
-          <th>操作</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr v-for="u in users" :key="u.id">
-          <td>{{ u.username }}</td>
-          <td><span class="badge" v-if="u.is_admin">超管</span><span v-else>普通用户</span></td>
-          <td>{{ formatTime(u.created_at) }}</td>
-          <td>{{ formatTime(u.last_login_at, '从未登录') }}</td>
-          <td>{{ u.word_count }}</td>
-          <td><button class="link-btn" @click="resetPassword(u)">重置密码</button></td>
-        </tr>
-      </tbody>
-    </table>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>用户名</th>
+            <th>角色</th>
+            <th>状态</th>
+            <th>创建时间</th>
+            <th>最后登录</th>
+            <th>单词数</th>
+            <th class="op-col">操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="u in users" :key="u.id">
+            <td>{{ u.username }}</td>
+            <td><span class="badge" v-if="u.is_admin">超管</span><span v-else>普通用户</span></td>
+            <td><span class="badge" :class="{ disabled: u.disabled }">{{ u.disabled ? '已禁用' : '正常' }}</span></td>
+            <td class="nowrap">{{ formatTime(u.created_at) }}</td>
+            <td class="nowrap">{{ formatTime(u.last_login_at, '从未登录') }}</td>
+            <td>{{ u.word_count }}</td>
+            <td class="op-col">
+              <button class="link-btn" @click="resetPassword(u)">重置密码</button>
+              <button class="link-btn" :disabled="u.id === currentUserId" @click="toggleDisabled(u)">
+                {{ u.disabled ? '启用' : '禁用' }}
+              </button>
+              <button class="link-btn danger" :disabled="u.id === currentUserId" @click="deleteUser(u)">删除</button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
 
     <label>用户名</label>
     <input type="text" v-model="newUser.username" placeholder="新用户的用户名" />

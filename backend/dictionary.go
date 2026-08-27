@@ -139,6 +139,10 @@ func (a *App) handleRetryDictionary(w http.ResponseWriter, r *http.Request) {
 
 	cfg := a.getDeepSeekConfig()
 	result := translateWord(r.Context(), wordKey, cfg)
+	if result.IsSpellingError {
+		writeError(w, http.StatusUnprocessableEntity, "单词拼写可能有误，请检查")
+		return
+	}
 	merged := mergeSensesByPos(result.Senses)
 	if len(merged) == 0 {
 		writeError(w, http.StatusServiceUnavailable, "重新查询失败，请稍后重试")

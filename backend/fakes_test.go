@@ -59,6 +59,27 @@ func (f *fakeUserStore) UpdatePasswordHash(ctx context.Context, id int, hash str
 	return 1, nil
 }
 
+func (f *fakeUserStore) SetDisabled(ctx context.Context, id int, disabled bool) (int64, error) {
+	for name, u := range f.usersByName {
+		if u.ID == id {
+			u.Disabled = disabled
+			f.usersByName[name] = u
+			return 1, nil
+		}
+	}
+	return 0, nil
+}
+
+func (f *fakeUserStore) Delete(ctx context.Context, id int) (int64, error) {
+	for name, u := range f.usersByName {
+		if u.ID == id {
+			delete(f.usersByName, name)
+			return 1, nil
+		}
+	}
+	return 0, nil
+}
+
 func (f *fakeUserStore) RecordLogin(ctx context.Context, id int, now time.Time) error {
 	f.logins[id] = now
 	return nil

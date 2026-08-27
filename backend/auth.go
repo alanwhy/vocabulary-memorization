@@ -118,6 +118,79 @@ func (a *App) handleResetUserPassword(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"password": newPassword})
 }
 
+type disableUserRequest struct {
+	Disabled bool `json:"disabled"`
+}
+
+// handleDisableUser 管理员禁用/启用指定用户。禁用后该用户所有已登录会话立即失效；
+// 允许再次启用恢复。不能对自己操作，避免把当前超管自己锁在门外。
+func (a *App) handleDisableUser(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "无效的 id")
+		return
+	}
+	if currentUser(r).ID == id {
+		writeError(w, http.StatusBadRequest, "不能禁用自己")
+		return
+	}
+	var req disableUserRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "请求格式不正确")
+		return
+	}
+
+	affected, err := a.users.SetDisabled(r.Context(), id, req.Disabled)
+	if err != nil {
+		log.Printf("更新用户禁用状态失败 user_id=%d: %v", id, err)
+		writeError(w, http.StatusInternalServerError, "操作失败")
+		return
+	}
+	if affected == 0 {
+		writeError(w, http.StatusNotFound, "用户不存在")
+		return
+	}
+
+	if req.Disabled {
+		if err := a.sessions.DeleteByUser(r.Context(), id); err != nil {
+			log.Printf("清除会话失败 user_id=%d: %v", id, err)
+		}
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleDeleteUser 管理员删除指定用户，连带清除其会话与全部单词。不能删除自己。
+// 老库没有外键级联约束，这里显式清理，避免留下孤儿数据。
+func (a *App) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "无效的 id")
+		return
+	}
+	if currentUser(r).ID == id {
+		writeError(w, http.StatusBadRequest, "不能删除自己")
+		return
+	}
+
+	if err := a.sessions.DeleteByUser(r.Context(), id); err != nil {
+		log.Printf("清除会话失败 user_id=%d: %v", id, err)
+	}
+	if _, err := a.words.DeleteByUserID(r.Context(), id); err != nil {
+		log.Printf("删除用户单词失败 user_id=%d: %v", id, err)
+	}
+	affected, err := a.users.Delete(r.Context(), id)
+	if err != nil {
+		log.Printf("删除用户失败 user_id=%d: %v", id, err)
+		writeError(w, http.StatusInternalServerError, "删除失败")
+		return
+	}
+	if affected == 0 {
+		writeError(w, http.StatusNotFound, "用户不存在")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 type changePasswordRequest struct {
 	OldPassword string `json:"old_password"`
 	NewPassword string `json:"new_password"`
@@ -220,6 +293,12 @@ func (a *App) handleLogin(w http.ResponseWriter, r *http.Request) {
 	a.loginLimiter.Reset(ipKey)
 	a.loginLimiter.Reset(userKey)
 
+	// 密码正确但账号被禁用：拒绝登录，且不计入失败限流（这不是暴力破解）
+	if user.Disabled {
+		writeError(w, http.StatusForbidden, "账号已被禁用，请联系管理员")
+		return
+	}
+
 	token := randomToken()
 	now := time.Now()
 	expiresAt := now.Add(sessionTTL)
@@ -301,6 +380,15 @@ func (a *App) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 		if err != nil {
 			log.Printf("校验会话失败: %v", err)
 			writeError(w, http.StatusInternalServerError, "登录状态校验失败")
+			return
+		}
+
+		// 账号被禁用后已有会话立即失效：清掉该用户全部会话，避免后续请求反复走到这里
+		if user.Disabled {
+			if err := a.sessions.DeleteByUser(r.Context(), user.ID); err != nil {
+				log.Printf("清除被禁用用户会话失败 user_id=%d: %v", user.ID, err)
+			}
+			writeError(w, http.StatusUnauthorized, "账号已被禁用")
 			return
 		}
 
