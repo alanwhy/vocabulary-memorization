@@ -37,6 +37,18 @@ func sensesEnriched(senses []Sense) bool {
 	return senses[0].Lookalikes != nil
 }
 
+// sensesNeedEnrichment 判断释义是否「有正常释义但缺强化字段」——缺少例句/词根词缀/
+// 近反义/形近词（老数据用旧 prompt 查的，lookalikes 为 nil）。空释义与 error 占位
+// 返回 false：空释义由录入查词链路处理，error 占位由单词列表的用户重试处理。
+// 只针对「有释义但没强化过」的词，避免重复调用大模型。
+func sensesNeedEnrichment(senses []Sense) bool {
+	if len(senses) == 0 {
+		return false
+	}
+	s := senses[0]
+	return s.Pos != "error" && s.Lookalikes == nil
+}
+
 // mergeSenseEnrichment 把 src 的非空强化字段合并进 dst，字段级「首个非空值优先」：
 // 组内后出现的空字段不会覆盖前面已经记下的有效值。
 func mergeSenseEnrichment(dst *Sense, src Sense) {

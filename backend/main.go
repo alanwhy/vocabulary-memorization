@@ -596,6 +596,16 @@ func (a *App) handleFlashcardReview(w http.ResponseWriter, r *http.Request) {
 	wd.EaseFactor = easeFactor
 	wd.DueAt = &dueAt
 	wd.Archived = archived
+
+	// 释义缺扩展信息且用户点「不认识」时，后台补一次查词（复用录入查词链路）
+	if req.Rating == "again" && !wd.Translating && sensesNeedEnrichment(wd.Senses) {
+		if err := a.words.MarkTranslating(r.Context(), req.ID, now); err != nil {
+			log.Printf("标记释义补全失败 word=%s id=%d: %v", wd.WordKey, req.ID, err)
+		} else {
+			a.spawnTranslation(req.ID, wd.WordKey)
+		}
+	}
+
 	writeJSON(w, http.StatusOK, wd)
 }
 
