@@ -17,6 +17,8 @@ const current = computed(() => cards.value[index.value] ?? null)
 // 词级强化信息（音标/词根词缀/近反义）从第一条词性取（平铺模型下每条重复）
 const firstSense = computed(() => (current.value?.senses && current.value.senses[0]) || {})
 const phonetic = computed(() => firstSense.value.phonetic || '')
+// 单词面例句：取第一条含英文例句的词性，仅展示英文原文（不含中文释义）
+const frontExample = computed(() => (current.value?.senses || []).find((s) => s.example) || null)
 const rootAffix = computed(() => {
   const parts = [firstSense.value.root, firstSense.value.affix].filter(Boolean)
   return parts.join(' + ') // 只返回词根词缀内容，「词根词缀：」标题由模板统一渲染
@@ -116,6 +118,10 @@ onMounted(() => {
         <div class="flip-inner">
           <div class="face front">
             <span class="word">{{ current.display_word }}</span>
+            <span class="phonetic" v-if="phonetic">{{ phonetic }}</span>
+            <span class="front-example" v-if="frontExample">
+              <span v-for="(t, i) in exampleTokens(frontExample)" :key="i" :class="t.level ? hlClass(t.level) : ''">{{ t.text }}</span>
+            </span>
             <span class="hint">点击翻面看释义</span>
           </div>
           <div class="face back">
@@ -303,6 +309,13 @@ onMounted(() => {
 .face .phonetic {
   font-size: 16px;
   color: var(--muted);
+}
+.face .front-example {
+  font-size: 13px;
+  color: var(--muted);
+  font-style: italic;
+  text-align: center;
+  line-height: 1.5;
 }
 .enrich {
   display: flex;
