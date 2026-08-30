@@ -61,6 +61,9 @@ func main() {
 	adminID := app.bootstrapAdmin()
 	finalizeWordsUserID(adminID)
 	app.loadSettings()
+	if err := ensureAudioDir(); err != nil {
+		log.Fatalf("创建音频目录失败: %v", err)
+	}
 	app.resumeStuckTranslations()
 
 	go app.startStuckTranslationSweeper()
@@ -85,6 +88,7 @@ func main() {
 	mux.HandleFunc("POST /api/words/{id}/retry", withTimeout(defaultRequestTimeout)(app.requireAuth(app.handleRetryWord)))
 	mux.HandleFunc("GET /api/flashcards/queue", withTimeout(defaultRequestTimeout)(app.requireAuth(app.handleFlashcardQueue)))
 	mux.HandleFunc("POST /api/flashcards/review", withTimeout(defaultRequestTimeout)(app.requireAuth(app.handleFlashcardReview)))
+	mux.HandleFunc("GET /api/pronounce/{wordKey}", withTimeout(defaultRequestTimeout)(app.requireAuth(app.handlePronounce)))
 
 	mux.HandleFunc("POST /api/admin/users", withTimeout(defaultRequestTimeout)(app.requireAdmin(app.handleCreateUser)))
 	mux.HandleFunc("GET /api/admin/users", withTimeout(defaultRequestTimeout)(app.requireAdmin(app.handleListUsers)))
@@ -327,6 +331,8 @@ func (a *App) translateAndSave(ctx context.Context, wordID int, wordKey string) 
 		if len(merged) > 0 {
 			a.saveWordSenses(ctx, wordID, wordKey, merged)
 			a.saveDictionarySenses(ctx, wordKey, merged)
+			// 查词成功后后台预生成发音（豆包 TTS），点喇叭时秒响；失败静默，播放时再兜底
+			a.spawnTTS(wordKey)
 			return
 		}
 		if attempt >= len(translateRetryDelays) {

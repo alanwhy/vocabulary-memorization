@@ -3,6 +3,7 @@ import { computed, onMounted } from 'vue'
 import { formatTime } from '@/utils/format'
 import { countBadgeClass } from '@/utils/reviewLevel'
 import { useVocabularyIndex } from '@/composables/useVocabularyIndex'
+import { speakWord } from '@/composables/usePronunciation'
 import { tokenizeExample, splitWordRef } from '@/utils/highlight'
 
 const props = defineProps({
@@ -61,6 +62,14 @@ function exampleTokens(s) {
         <span class="word">{{ word.display_word }}</span>
         <span class="translating-status" v-if="word.translating">查询中...</span>
         <span class="phonetic" v-if="phonetic">{{ phonetic }}</span>
+        <button
+          type="button"
+          class="speak-btn"
+          :aria-label="`朗读 ${word.display_word}`"
+          @click="speakWord(word.word_key)"
+        >
+          🔊
+        </button>
       </div>
       <div class="word-meta">
         <span :class="countBadgeClass(word.review_count)">×{{ word.review_count }}</span>
@@ -151,6 +160,19 @@ function exampleTokens(s) {
 .phonetic {
   font-size: 13px;
   color: var(--muted);
+}
+.speak-btn {
+  border: none;
+  background: none;
+  cursor: pointer;
+  padding: 0 2px;
+  font-size: 14px;
+  line-height: 1;
+  opacity: 0.7;
+  transition: opacity 0.15s;
+}
+.speak-btn:hover {
+  opacity: 1;
 }
 .translating-status {
   font-size: 12px;

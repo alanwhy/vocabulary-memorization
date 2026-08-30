@@ -2,6 +2,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { apiGet, apiPost } from '@/api/client'
 import { useVocabularyIndex } from '@/composables/useVocabularyIndex'
+import { speakWord } from '@/composables/usePronunciation'
 import { tokenizeExample, splitWordRef } from '@/utils/highlight'
 
 const vocab = useVocabularyIndex()
@@ -119,6 +120,14 @@ onMounted(() => {
           <div class="face front">
             <span class="word">{{ current.display_word }}</span>
             <span class="phonetic" v-if="phonetic">{{ phonetic }}</span>
+            <button
+              type="button"
+              class="speak-btn"
+              :aria-label="`朗读 ${current.display_word}`"
+              @click.stop="speakWord(current.word_key)"
+            >
+              🔊
+            </button>
             <span class="front-example" v-if="frontExample">
               <span v-for="(t, i) in exampleTokens(frontExample)" :key="i" :class="t.level ? hlClass(t.level) : ''">{{ t.text }}</span>
             </span>
@@ -309,6 +318,19 @@ onMounted(() => {
 .face .phonetic {
   font-size: 16px;
   color: var(--muted);
+}
+.face .speak-btn {
+  border: none;
+  background: none;
+  cursor: pointer;
+  padding: 0 2px;
+  font-size: 16px;
+  line-height: 1;
+  opacity: 0.7;
+  transition: opacity 0.15s;
+}
+.face .speak-btn:hover {
+  opacity: 1;
 }
 .face .front-example {
   font-size: 13px;

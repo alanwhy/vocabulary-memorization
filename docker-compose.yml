@@ -39,8 +39,11 @@ services:
       DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL}
       DEEPSEEK_FALLBACK_MODEL: ${DEEPSEEK_FALLBACK_MODEL}
       DEEPSEEK_THINKING_MODEL: ${DEEPSEEK_THINKING_MODEL}
+    volumes:
+      - audio_data:/app/audio
     ports:
       - "39100:8080"
 
 volumes:
   mysql_data:
+  audio_data:

@@ -2,6 +2,15 @@
 
 本项目的版本变更记录，格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [1.15.0] - 2026-08-30
+
+### Added
+- 单词读音：接入豆包（火山引擎）语音合成，查词成功后后台预生成发音 mp3 到磁盘（`audio/` 目录，docker 挂 volume 持久化），单词卡与闪卡正面新增喇叭按钮点读
+
+### Changed
+- 豆包语音为唯一读音来源：未配置或合成失败时前端明确提示原因（如「语音合成未配置」「语音合成失败: request and grant appid mismatch」），不再回退浏览器本地合成
+- 后台管理页新增「豆包语音配置」（API Key / Cluster / 音色），与 DeepSeek 配置同页管理；后端 `/api/admin/settings` 接口扩展为两者平铺结构
+
 ## [1.14.0] - 2026-08-28
 
 ### Added

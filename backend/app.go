@@ -95,6 +95,7 @@ type App struct {
 
 	settingsMu sync.RWMutex
 	dsConfig   deepseekConfig
+	ttsConfig  ttsConfig
 
 	// bgCtx 是所有后台任务（后台查词 goroutine）共用的生命周期 context，
 	// 进程收到关闭信号时被 cancel，正在等待中的任务据此提前退出。
