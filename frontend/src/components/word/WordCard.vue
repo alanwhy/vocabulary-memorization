@@ -113,7 +113,15 @@ function exampleTokens(s) {
     <div class="word-actions">
       <template v-if="mode === 'active'">
         <button
-          v-if="!word.translating && !hasError && validSenses.length"
+          v-if="word.archived"
+          class="action-btn archived-btn"
+          disabled
+          title="该词已归档，刷新后将从当前列表消失"
+        >
+          已归档
+        </button>
+        <button
+          v-else-if="!word.translating && !hasError && validSenses.length"
           class="action-btn primary"
           @click="$emit('archive', word)"
         >
@@ -282,6 +290,11 @@ function exampleTokens(s) {
 .action-btn.primary:hover {
   background: var(--accent);
   color: #fff;
+}
+.action-btn.archived-btn {
+  color: var(--muted);
+  border-color: var(--border);
+  cursor: not-allowed;
 }
 .action-btn.danger {
   color: var(--danger);

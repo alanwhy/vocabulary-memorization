@@ -27,6 +27,20 @@
   --count-5-fg: #ffffff;
   --count-6-bg: #a11d1d;
   --count-6-fg: #ffffff;
+
+  /* 词引用高亮（例句/近反义/形近词里的命中词）走蓝→紫冷色调，与次数徽标的热力色区分 */
+  --hl-1-bg: #e3f0ff;
+  --hl-1-fg: #1d6fd1;
+  --hl-2-bg: #e6e9ff;
+  --hl-2-fg: #4650d6;
+  --hl-3-bg: #ede6ff;
+  --hl-3-fg: #6a4fd0;
+  --hl-4-bg: #f5e6ff;
+  --hl-4-fg: #8a3fd0;
+  --hl-5-bg: #7c4ddb;
+  --hl-5-fg: #ffffff;
+  --hl-6-bg: #4c2a9e;
+  --hl-6-fg: #ffffff;
 }
 html.dark {
   color-scheme: dark;
@@ -53,6 +67,19 @@ html.dark {
   --count-5-fg: #ffe9e6;
   --count-6-bg: #7a1414;
   --count-6-fg: #ffd9d6;
+
+  --hl-1-bg: #16263a;
+  --hl-1-fg: #7db8f0;
+  --hl-2-bg: #1c2140;
+  --hl-2-fg: #97a2f2;
+  --hl-3-bg: #251c42;
+  --hl-3-fg: #b79ff2;
+  --hl-4-bg: #2d1d40;
+  --hl-4-fg: #d1a6f0;
+  --hl-5-bg: #5b3bb8;
+  --hl-5-fg: #f0e8ff;
+  --hl-6-bg: #3a2470;
+  --hl-6-fg: #e6d6ff;
 }
 * { box-sizing: border-box; }
 html, body {
@@ -133,19 +160,20 @@ h2 {
 .count-badge--l4 { background: var(--count-4-bg); color: var(--count-4-fg); }
 .count-badge--l5 { background: var(--count-5-bg); color: var(--count-5-fg); }
 .count-badge--l6 { background: var(--count-6-bg); color: var(--count-6-fg); }
-/* 词库命中高亮：例句/近反义/形近词里出现过的词，按出现次数阶梯着色（复用 count-badge 配色） */
+/* 词库命中高亮：例句/近反义/形近词里出现过的词，按出现次数阶梯着色。
+   走蓝→紫冷色调（--hl-N-*），与次数徽标 count-badge 的绿→红热力色区分开 */
 .hl-word {
   padding: 0 3px;
   border-radius: 4px;
   font-weight: 600;
-  background: var(--count-1-bg);
-  color: var(--count-1-fg);
+  background: var(--hl-1-bg);
+  color: var(--hl-1-fg);
 }
-.hl-word--l2 { background: var(--count-2-bg); color: var(--count-2-fg); }
-.hl-word--l3 { background: var(--count-3-bg); color: var(--count-3-fg); }
-.hl-word--l4 { background: var(--count-4-bg); color: var(--count-4-fg); }
-.hl-word--l5 { background: var(--count-5-bg); color: var(--count-5-fg); }
-.hl-word--l6 { background: var(--count-6-bg); color: var(--count-6-fg); }
+.hl-word--l2 { background: var(--hl-2-bg); color: var(--hl-2-fg); }
+.hl-word--l3 { background: var(--hl-3-bg); color: var(--hl-3-fg); }
+.hl-word--l4 { background: var(--hl-4-bg); color: var(--hl-4-fg); }
+.hl-word--l5 { background: var(--hl-5-bg); color: var(--hl-5-fg); }
+.hl-word--l6 { background: var(--hl-6-bg); color: var(--hl-6-fg); }
 /* 列表底部的滚动加载状态 */
 .load-state {
   text-align: center;

@@ -4,6 +4,7 @@ import { apiGet, apiPost } from '@/api/client'
 import { useVocabularyIndex } from '@/composables/useVocabularyIndex'
 import { speakWord } from '@/composables/usePronunciation'
 import { tokenizeExample, splitWordRef } from '@/utils/highlight'
+import { countBadgeClass } from '@/utils/reviewLevel'
 
 const vocab = useVocabularyIndex()
 const cards = ref([])
@@ -118,6 +119,7 @@ onMounted(() => {
       <div class="flip" :class="{ flipped }" @click="flip">
         <div class="flip-inner">
           <div class="face front">
+            <span class="front-count" :class="countBadgeClass(current.review_count)">×{{ current.review_count }}</span>
             <span class="word">{{ current.display_word }}</span>
             <span class="phonetic" v-if="phonetic">{{ phonetic }}</span>
             <button
@@ -246,6 +248,7 @@ onMounted(() => {
   transform: rotateY(180deg);
 }
 .face {
+  position: relative;
   grid-area: 1 / 1;
   backface-visibility: hidden;
   -webkit-backface-visibility: hidden;
@@ -354,6 +357,11 @@ onMounted(() => {
 .face .count {
   font-size: 12px;
   color: var(--muted);
+}
+.face .front-count {
+  position: absolute;
+  top: 14px;
+  right: 14px;
 }
 
 .error {
