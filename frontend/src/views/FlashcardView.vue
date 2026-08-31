@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, nextTick } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { apiGet, apiPost } from '@/api/client'
 import { useVocabularyIndex } from '@/composables/useVocabularyIndex'
 import { useWordLookup } from '@/composables/useWordLookup'
@@ -16,8 +16,6 @@ const submitting = ref(false)
 const loading = ref(true)
 const error = ref('')
 const doneCount = ref(0)
-// 切到下一张时临时关闭翻转过渡，避免翻转回正面的动画期间露出下一张卡片的释义
-const snapFront = ref(false)
 
 const current = computed(() => cards.value[index.value] ?? null)
 // 当前单词的小写 key，例句里只有它会被高亮（其余词不再按词库着色）
@@ -92,6 +90,9 @@ function flip() {
   flipped.value = !flipped.value
 }
 
+// 翻转过渡时长（ms），需与 .flip-inner 的 transition 时长保持一致
+const FLIP_MS = 500
+
 async function rate(rating) {
   if (!current.value || submitting.value) return
   submitting.value = true
@@ -99,13 +100,13 @@ async function rate(rating) {
   try {
     await apiPost('/api/flashcards/review', { id: current.value.id, rating })
     doneCount.value += 1
-    // 先无动画翻回正面，再切到下一张：避免翻转过渡期间露出下一张卡片的释义
-    snapFront.value = true
-    flipped.value = false
+    if (flipped.value) {
+      // 先翻回正面（仍是当前单词），等翻转动画结束再切下一张，
+      // 避免翻转回正面的动画期间露出下一张卡片的背面中文释义
+      flipped.value = false
+      await new Promise((resolve) => setTimeout(resolve, FLIP_MS))
+    }
     index.value += 1
-    nextTick(() => {
-      snapFront.value = false
-    })
   } catch (e) {
     error.value = e.message || '提交失败'
   } finally {
@@ -141,7 +142,7 @@ onMounted(() => {
 
     <template v-else>
       <div class="flip" :class="{ flipped }" @click="flip">
-        <div class="flip-inner" :class="{ 'no-anim': snapFront }">
+        <div class="flip-inner">
           <div class="face front">
             <span class="front-count" :class="countBadgeClass(current.review_count)">×{{ current.review_count }}</span>
             <span class="word">{{ current.display_word }}</span>
@@ -277,9 +278,6 @@ onMounted(() => {
   display: grid;
   transform-style: preserve-3d;
   transition: transform 0.5s ease;
-}
-.flip-inner.no-anim {
-  transition: none;
 }
 .flip.flipped .flip-inner {
   transform: rotateY(180deg);
