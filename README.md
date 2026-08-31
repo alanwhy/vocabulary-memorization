@@ -6,7 +6,7 @@
 ![Vue](https://img.shields.io/badge/Vue-3.5-4FC08D?logo=vuedotjs&logoColor=white)
 ![MySQL](https://img.shields.io/badge/MySQL-8-4479A1?logo=mysql&logoColor=white)
 ![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)
-![License](https://img.shields.io/badge/License-暂无-999)
+![License](https://img.shields.io/badge/License-MIT-blue)
 
 ## 特性
 
@@ -148,4 +148,4 @@ vocabulary-memorization/
 
 ## License
 
-当前仓库暂未指定开源许可证。如需公开，建议补一份 [LICENSE](../LICENSE)（如 MIT / Apache-2.0）并在 `.gitignore`、`.env.example` 等敏感配置上做一次审查。
+[MIT](LICENSE) © 2026 alanwhy
