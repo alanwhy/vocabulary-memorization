@@ -1,0 +1,24 @@
+# 密钥泄漏扫描：每次 push / PR 时用 gitleaks 扫一遍提交历史，防止 API Key、数据库密码等被误提交。
+# 之前 DeepSeek Key 被 GitHub push protection 拦过一次，这里再加一道兜底。
+# fetch-depth: 0 是为了让 gitleaks 能扫到完整 git 历史，而不只是本次 diff。
+name: Secret scan
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  gitleaks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

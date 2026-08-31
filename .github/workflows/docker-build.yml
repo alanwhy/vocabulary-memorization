@@ -1,0 +1,21 @@
+# Docker 镜像构建校验：只验证 backend/Dockerfile 能完整构建（含前端 + Go 后端两个 stage），
+# 不推送镜像。目的是一旦 Dockerfile / 依赖出了问题，在 PR 阶段就暴露，而不是等到部署时才炸。
+name: Docker build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Dockerfile 的 context 是仓库根目录（内部 COPY frontend/ 和 backend/），所以这里传 "."。
+      # 该 Dockerfile 与生产部署用的是同一份，构建成功即代表线上能构建。
+      - name: Build image
+        run: docker build -f backend/Dockerfile -t vocab-backend:ci .

@@ -1,0 +1,63 @@
+# 必做 CI：push / PR 时跑后端(Go)和前端(Vue)的静态检查、单测与构建。
+# 两个 job 独立并行；用 paths 过滤让它们只在各自文件变动时触发，省时间。
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: gofmt check
+        run: test -z "$(gofmt -l .)" || { echo "以下文件未 gofmt，请本地 gofmt -w 修正："; gofmt -l .; exit 1; }
+
+      - name: go test
+        run: go test ./...
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      # 直接跑 oxlint / eslint 而非 npm run lint，因为后者带 --fix 会在 CI 里静默改文件。
+      - name: Lint (oxlint)
+        run: npx oxlint .
+
+      - name: Lint (eslint)
+        run: npx eslint .
+
+      - name: Build
+        run: npm run build

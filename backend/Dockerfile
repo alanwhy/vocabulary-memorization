@@ -1,4 +1,4 @@
-FROM node:20-alpine AS frontend-builder
+FROM node:22-alpine AS frontend-builder
 WORKDIR /app/frontend
 ENV NPM_CONFIG_REGISTRY=https://registry.npmmirror.com
 COPY frontend/package.json frontend/package-lock.json ./
