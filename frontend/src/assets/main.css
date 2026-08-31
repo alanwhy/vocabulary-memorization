@@ -174,6 +174,16 @@ h2 {
 .hl-word--l4 { background: var(--hl-4-bg); color: var(--hl-4-fg); }
 .hl-word--l5 { background: var(--hl-5-bg); color: var(--hl-5-fg); }
 .hl-word--l6 { background: var(--hl-6-bg); color: var(--hl-6-fg); }
+/* 例句/近反义/形近词里可点击查询的单词：手型 + hover 下划线提示可点 */
+.lookup-word {
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background 0.15s;
+}
+.lookup-word:hover {
+  background: var(--accent-soft);
+  text-decoration: underline;
+}
 /* 列表底部的滚动加载状态 */
 .load-state {
   text-align: center;

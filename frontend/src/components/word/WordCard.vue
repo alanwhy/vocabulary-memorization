@@ -3,6 +3,7 @@ import { computed, onMounted } from 'vue'
 import { formatTime } from '@/utils/format'
 import { countBadgeClass } from '@/utils/reviewLevel'
 import { useVocabularyIndex } from '@/composables/useVocabularyIndex'
+import { useWordLookup } from '@/composables/useWordLookup'
 import { speakWord } from '@/composables/usePronunciation'
 import { tokenizeExample, splitWordRef } from '@/utils/highlight'
 
@@ -13,6 +14,7 @@ const props = defineProps({
 defineEmits(['archive', 'unarchive', 'delete', 'retry'])
 
 const vocab = useVocabularyIndex()
+const lookup = useWordLookup()
 onMounted(vocab.ensure)
 
 // 错误态：释义里含占位性质的 sense（新版拼写错误/查询失败用 pos === 'error'，旧版查询失败用 pos === '系统提示'）。
@@ -36,7 +38,7 @@ const rootAffix = computed(() => {
 
 // 近义词/反义词/形近词统一拆成「英文词 + 中文释义」，英文词按词库命中情况高亮
 const enrichGroups = computed(() => {
-  const mk = (label, list) => ({ label, refs: (list || []).map((r) => splitWordRef(r, vocab.lookup)) })
+  const mk = (label, list) => ({ label, refs: (list || []).map((r) => splitWordRef(r)) })
   return [
     mk('近义词', first.value.synonyms),
     mk('反义词', first.value.antonyms),
@@ -51,7 +53,20 @@ function hlClass(level) {
 }
 
 function exampleTokens(s) {
-  return tokenizeExample(s.example || '', vocab.lookup)
+  return tokenizeExample(s.example || '', vocab.lookup, props.word.word_key)
+}
+
+// 点击例句里的某个 token：单词打开查词 tooltip，非单词忽略
+function onTokenClick(e, t) {
+  if (!t.isWord) return
+  e.stopPropagation()
+  lookup.open(e, t.text)
+}
+
+// 点击近反义/形近词里的英文词：打开查词 tooltip
+function openLookup(e, word) {
+  e.stopPropagation()
+  lookup.open(e, word)
 }
 </script>
 
@@ -92,7 +107,12 @@ function exampleTokens(s) {
           <span class="translation">{{ s.translation }}</span>
           <span class="example" v-if="s.example || s.example_translation">
             <span class="example-en" v-if="s.example">
-              <span v-for="(t, i) in exampleTokens(s)" :key="i" :class="t.level ? hlClass(t.level) : ''">{{ t.text }}</span>
+              <span
+                v-for="(t, i) in exampleTokens(s)"
+                :key="i"
+                :class="[t.isWord ? 'lookup-word' : '', t.level ? hlClass(t.level) : '']"
+                @click="onTokenClick($event, t)"
+              >{{ t.text }}</span>
             </span>
             <span class="example-trans" v-if="s.example_translation">{{ s.example_translation }}</span>
           </span>
@@ -106,7 +126,7 @@ function exampleTokens(s) {
           <span class="enrich-label">词根词缀：</span>{{ rootAffix }}
         </span>
         <span v-for="g in enrichGroups" :key="g.label">
-          <span class="enrich-label">{{ g.label }}：</span><span v-for="(r, i) in g.refs" :key="i">{{ i > 0 ? '、' : '' }}<span :class="r.level ? hlClass(r.level) : ''">{{ r.word }}</span>{{ r.rest }}</span>
+          <span class="enrich-label">{{ g.label }}：</span><span v-for="(r, i) in g.refs" :key="i">{{ i > 0 ? '、' : '' }}<span class="lookup-word" @click="openLookup($event, r.word)">{{ r.word }}</span>{{ r.rest }}</span>
         </span>
       </div>
     </div>

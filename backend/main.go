@@ -80,6 +80,7 @@ func main() {
 	mux.HandleFunc("GET /api/words", withTimeout(defaultRequestTimeout)(app.requireAuth(app.handleListWords)))
 	mux.HandleFunc("POST /api/words/reset-counts", withTimeout(defaultRequestTimeout)(app.requireAuth(app.handleResetReviewCounts)))
 	mux.HandleFunc("GET /api/words/translating", withTimeout(defaultRequestTimeout)(app.requireAuth(app.handleListTranslatingWords)))
+	mux.HandleFunc("GET /api/words/lookup", withTimeout(defaultRequestTimeout)(app.requireAuth(app.handleLookupWord)))
 	mux.HandleFunc("GET /api/vocabulary", withTimeout(defaultRequestTimeout)(app.requireAuth(app.handleVocabularyIndex)))
 	mux.HandleFunc("GET /api/stats", withTimeout(defaultRequestTimeout)(app.requireAuth(app.handleWordStats)))
 	mux.HandleFunc("DELETE /api/words/{id}", withTimeout(defaultRequestTimeout)(app.requireAuth(app.handleDeleteWord)))
@@ -510,6 +511,34 @@ func (a *App) handleListTranslatingWords(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	writeJSON(w, http.StatusOK, list)
+}
+
+// handleLookupWord 精确查当前用户是否已录入某个单词，供例句/近反义/形近词点击查询用。
+// 命中返回该词完整信息（含释义），未命中返回 null（JSON），前端据此决定是否「自动录入」一次。
+func (a *App) handleLookupWord(w http.ResponseWriter, r *http.Request) {
+	user := currentUser(r)
+	wordKey := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("word")))
+	if wordKey == "" {
+		writeError(w, http.StatusBadRequest, "单词不能为空")
+		return
+	}
+
+	wd, sensesRaw, err := a.words.FindByUserAndKey(r.Context(), user.ID, wordKey)
+	if err == sql.ErrNoRows {
+		writeJSON(w, http.StatusOK, nil)
+		return
+	}
+	if err != nil {
+		log.Printf("查询单词失败: %v", err)
+		writeError(w, http.StatusInternalServerError, "查询失败")
+		return
+	}
+	if len(sensesRaw) > 0 {
+		if err := json.Unmarshal(sensesRaw, &wd.Senses); err != nil {
+			log.Printf("解析释义失败: %v", err)
+		}
+	}
+	writeJSON(w, http.StatusOK, wd)
 }
 
 // handleWordStats 返回统计页需要的聚合数值。列表改成分页后前端拿不到全量数据，

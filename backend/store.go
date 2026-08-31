@@ -292,14 +292,15 @@ func (r *wordRepo) ApplyFlashcardReview(ctx context.Context, id, userID, newCoun
 }
 
 // DueFlashcards 返回当前用户到期的闪卡队列：从未复习过（due_at 为 NULL）的词 + 已到期（due_at <= now）的词。
-// 只含未归档词。排序遵循「新词优先 → 背诵次数最多优先 → 到期时间先后 → id 收尾」，
-// 背诵次数权重提前，让反复背反复忘的词优先出现；id 收尾保证顺序确定。
+// 只含未归档词。排序遵循「背诵次数最多优先 → 到期时间先后 → id 收尾」，
+// 背诵次数作为第一优先级，让反复背反复忘的词每组都最先出现，直到「记住」归档；
+// 到期时间先后（新词 due_at 为 NULL 靠前）与 id 收尾保证顺序确定。
 // limit 控制每组取多少张，背完一组后这些词被排期/归档，下次再取自然轮到下一批。
 func (r *wordRepo) DueFlashcards(ctx context.Context, userID, limit int, now time.Time) ([]Word, error) {
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT `+wordColumns+` FROM words
 		 WHERE user_id = ? AND archived = 0 AND (due_at IS NULL OR due_at <= ?)
-		 ORDER BY (due_at IS NULL) DESC, review_count DESC, due_at ASC, id ASC
+		 ORDER BY review_count DESC, due_at ASC, id ASC
 		 LIMIT ?`,
 		userID, now, limit,
 	)

@@ -3,6 +3,7 @@ import { watch } from 'vue'
 import { RouterView } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import AppTopbar from '@/components/layout/AppTopbar.vue'
+import WordLookupTooltip from '@/components/word/WordLookupTooltip.vue'
 
 const auth = useAuthStore()
 
@@ -33,5 +34,6 @@ watch(
   <div v-else>
     <AppTopbar v-if="auth.isAuthenticated" />
     <RouterView />
+    <WordLookupTooltip />
   </div>
 </template>

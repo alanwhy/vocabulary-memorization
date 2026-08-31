@@ -1,12 +1,14 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, nextTick } from 'vue'
 import { apiGet, apiPost } from '@/api/client'
 import { useVocabularyIndex } from '@/composables/useVocabularyIndex'
+import { useWordLookup } from '@/composables/useWordLookup'
 import { speakWord } from '@/composables/usePronunciation'
 import { tokenizeExample, splitWordRef } from '@/utils/highlight'
 import { countBadgeClass } from '@/utils/reviewLevel'
 
 const vocab = useVocabularyIndex()
+const lookup = useWordLookup()
 const cards = ref([])
 const index = ref(0)
 const flipped = ref(false)
@@ -14,8 +16,12 @@ const submitting = ref(false)
 const loading = ref(true)
 const error = ref('')
 const doneCount = ref(0)
+// 切到下一张时临时关闭翻转过渡，避免翻转回正面的动画期间露出下一张卡片的释义
+const snapFront = ref(false)
 
 const current = computed(() => cards.value[index.value] ?? null)
+// 当前单词的小写 key，例句里只有它会被高亮（其余词不再按词库着色）
+const currentKey = computed(() => current.value?.word_key || '')
 // 词级强化信息（音标/词根词缀/近反义）从第一条词性取（平铺模型下每条重复）
 const firstSense = computed(() => (current.value?.senses && current.value.senses[0]) || {})
 const phonetic = computed(() => firstSense.value.phonetic || '')
@@ -26,7 +32,7 @@ const rootAffix = computed(() => {
   return parts.join(' + ') // 只返回词根词缀内容，「词根词缀：」标题由模板统一渲染
 })
 const enrichGroups = computed(() => {
-  const mk = (label, list) => ({ label, refs: (list || []).map((r) => splitWordRef(r, vocab.lookup)) })
+  const mk = (label, list) => ({ label, refs: (list || []).map((r) => splitWordRef(r)) })
   return [
     mk('近义词', firstSense.value.synonyms),
     mk('反义词', firstSense.value.antonyms),
@@ -40,7 +46,20 @@ function hlClass(level) {
 }
 
 function exampleTokens(s) {
-  return tokenizeExample(s.example || '', vocab.lookup)
+  return tokenizeExample(s.example || '', vocab.lookup, currentKey.value)
+}
+
+// 点击例句里的某个 token：单词打开查词 tooltip 并拦截冒泡，非单词放行（可翻面）
+function onTokenClick(e, t) {
+  if (!t.isWord) return
+  e.stopPropagation()
+  lookup.open(e, t.text)
+}
+
+// 点击近反义/形近词里的英文词：打开查词 tooltip 并拦截冒泡，避免触发翻面
+function openLookup(e, word) {
+  e.stopPropagation()
+  lookup.open(e, word)
 }
 // 当前组是否已背完（含空组）
 const finished = computed(() => !loading.value && index.value >= cards.value.length)
@@ -80,8 +99,13 @@ async function rate(rating) {
   try {
     await apiPost('/api/flashcards/review', { id: current.value.id, rating })
     doneCount.value += 1
-    index.value += 1
+    // 先无动画翻回正面，再切到下一张：避免翻转过渡期间露出下一张卡片的释义
+    snapFront.value = true
     flipped.value = false
+    index.value += 1
+    nextTick(() => {
+      snapFront.value = false
+    })
   } catch (e) {
     error.value = e.message || '提交失败'
   } finally {
@@ -117,7 +141,7 @@ onMounted(() => {
 
     <template v-else>
       <div class="flip" :class="{ flipped }" @click="flip">
-        <div class="flip-inner">
+        <div class="flip-inner" :class="{ 'no-anim': snapFront }">
           <div class="face front">
             <span class="front-count" :class="countBadgeClass(current.review_count)">×{{ current.review_count }}</span>
             <span class="word">{{ current.display_word }}</span>
@@ -131,7 +155,12 @@ onMounted(() => {
               🔊
             </button>
             <span class="front-example" v-if="frontExample">
-              <span v-for="(t, i) in exampleTokens(frontExample)" :key="i" :class="t.level ? hlClass(t.level) : ''">{{ t.text }}</span>
+              <span
+                v-for="(t, i) in exampleTokens(frontExample)"
+                :key="i"
+                :class="[t.isWord ? 'lookup-word' : '', t.level ? hlClass(t.level) : '']"
+                @click="onTokenClick($event, t)"
+              >{{ t.text }}</span>
             </span>
             <span class="hint">点击翻面看释义</span>
           </div>
@@ -143,7 +172,12 @@ onMounted(() => {
                 <span class="translation">{{ s.translation }}</span>
                 <span class="example" v-if="s.example || s.example_translation">
                   <span class="example-en" v-if="s.example">
-                    <span v-for="(t, i) in exampleTokens(s)" :key="i" :class="t.level ? hlClass(t.level) : ''">{{ t.text }}</span>
+                    <span
+                      v-for="(t, i) in exampleTokens(s)"
+                      :key="i"
+                      :class="[t.isWord ? 'lookup-word' : '', t.level ? hlClass(t.level) : '']"
+                      @click="onTokenClick($event, t)"
+                    >{{ t.text }}</span>
                   </span>
                   <span class="example-trans" v-if="s.example_translation">{{ s.example_translation }}</span>
                 </span>
@@ -159,7 +193,7 @@ onMounted(() => {
                 <span class="enrich-label">词根词缀：</span>{{ rootAffix }}
               </span>
               <span v-for="g in enrichGroups" :key="g.label">
-                <span class="enrich-label">{{ g.label }}：</span><span v-for="(r, i) in g.refs" :key="i">{{ i > 0 ? '、' : '' }}<span :class="r.level ? hlClass(r.level) : ''">{{ r.word }}</span>{{ r.rest }}</span>
+                <span class="enrich-label">{{ g.label }}：</span><span v-for="(r, i) in g.refs" :key="i">{{ i > 0 ? '、' : '' }}<span class="lookup-word" @click="openLookup($event, r.word)">{{ r.word }}</span>{{ r.rest }}</span>
               </span>
             </div>
             <span class="count">已背 ×{{ current.review_count }}</span>
@@ -243,6 +277,9 @@ onMounted(() => {
   display: grid;
   transform-style: preserve-3d;
   transition: transform 0.5s ease;
+}
+.flip-inner.no-anim {
+  transition: none;
 }
 .flip.flipped .flip-inner {
   transform: rotateY(180deg);
