@@ -1,0 +1,22 @@
+# 按 PR 改动的文件路径自动打 label。首次匹配到不存在的 label 时，labeler 会自动创建它。
+# 与 .github/workflows/labeler.yml 配合使用。
+frontend:
+  - changed-files:
+      - any-glob-to-any-file: 'frontend/**'
+
+backend:
+  - changed-files:
+      - any-glob-to-any-file: 'backend/**'
+
+documentation:
+  - changed-files:
+      - any-glob-to-any-file:
+          - '*.md'
+          - 'docs/**'
+          - 'LICENSE'
+
+github:
+  - changed-files:
+      - any-glob-to-any-file:
+          - '.github/**'
+          - '.gitignore'

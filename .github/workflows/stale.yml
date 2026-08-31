@@ -1,0 +1,38 @@
+# 自动关闭长期无活动的 issue / PR，避免僵尸条目堆积。
+# 每天 UTC 1:37 跑一次（避开整点/半点，减少调度拥堵）。
+name: Stale
+
+on:
+  schedule:
+    - cron: '37 1 * * *'
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  stale:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Mark and close stale
+        uses: actions/stale@v9
+        with:
+          days-before-issue-stale: 60
+          days-before-issue-close: 7
+          days-before-pr-stale: 60
+          days-before-pr-close: 7
+
+          stale-issue-message: '该 issue 已 60 天无活动，被标记为 stale。若仍需处理请评论说明，否则 7 天后会自动关闭。'
+          close-issue-message: '因长期无活动已自动关闭。如果问题仍然存在，欢迎重新打开或新建 issue。'
+          stale-pr-message: '该 PR 已 60 天无活动，被标记为 stale。若仍需合并请更新或评论，否则 7 天后会自动关闭。'
+          close-pr-message: '因长期无活动已自动关闭。'
+
+          stale-issue-label: 'stale'
+          stale-pr-label: 'stale'
+          exempt-issue-labels: 'pinned,security'
+          exempt-pr-labels: 'pinned'
+
+          # 从最旧的开始处理，每次最多 30 条，避免一次跑太多触发 API 限流。
+          ascending: true
+          operations-per-run: 30

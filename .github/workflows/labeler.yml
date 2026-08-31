@@ -1,0 +1,19 @@
+# 自动给 PR 打 label（frontend / backend / documentation / github），规则见 .github/labeler.yml。
+# 用 pull_request_target 让 fork 的 PR 也能触发；权限只开到「读内容 + 写 PR」，风险可控。
+name: Label PR
+
+on:
+  - pull_request_target
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Label
+        uses: actions/labeler@v5
+        with:
+          dot: true

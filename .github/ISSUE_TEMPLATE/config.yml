@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 📖 查看 README 与部署文档
+    url: https://github.com/alanwhy/vocabulary-memorization#readme
+    about: 使用 / 部署问题先看 README 和 DEPLOYMENT.md，很多答案已经写在那里
+  - name: 🔒 安全漏洞上报
+    url: https://github.com/alanwhy/vocabulary-memorization/security
+    about: 安全漏洞请走私密上报，不要在公开 issue 里贴出细节
