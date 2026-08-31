@@ -146,15 +146,17 @@ onMounted(() => {
           <div class="face front">
             <span class="front-count" :class="countBadgeClass(current.review_count)">×{{ current.review_count }}</span>
             <span class="word">{{ current.display_word }}</span>
-            <span class="phonetic" v-if="phonetic">{{ phonetic }}</span>
-            <button
-              type="button"
-              class="speak-btn"
-              :aria-label="`朗读 ${current.display_word}`"
-              @click.stop="speakWord(current.word_key)"
-            >
-              🔊
-            </button>
+            <span class="phonetic-row">
+              <span class="phonetic" v-if="phonetic">{{ phonetic }}</span>
+              <button
+                type="button"
+                class="speak-btn"
+                :aria-label="`朗读 ${current.display_word}`"
+                @click.stop="speakWord(current.word_key)"
+              >
+                🔊
+              </button>
+            </span>
             <span class="front-example" v-if="frontExample">
               <span
                 v-for="(t, i) in exampleTokens(frontExample)"
@@ -166,7 +168,17 @@ onMounted(() => {
             <span class="hint">点击翻面看释义</span>
           </div>
           <div class="face back">
-            <span class="phonetic" v-if="phonetic">{{ phonetic }}</span>
+            <span class="phonetic-row">
+              <span class="phonetic" v-if="phonetic">{{ phonetic }}</span>
+              <button
+                type="button"
+                class="speak-btn"
+                :aria-label="`朗读 ${current.display_word}`"
+                @click.stop="speakWord(current.word_key)"
+              >
+                🔊
+              </button>
+            </span>
             <div class="senses" v-if="current.senses && current.senses.length">
               <div class="sense" v-for="(s, i) in current.senses" :key="i">
                 <span class="pos" v-if="s.pos">{{ s.pos }}</span>
@@ -353,6 +365,11 @@ onMounted(() => {
   font-size: 13px;
   color: var(--muted);
 }
+.face .phonetic-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
 .face .phonetic {
   font-size: 16px;
   color: var(--muted);
@@ -380,7 +397,7 @@ onMounted(() => {
 .enrich {
   display: flex;
   flex-direction: column;
-  align-items: center;
+  align-items: flex-start;
   gap: 4px;
   font-size: 12px;
   color: var(--muted);
@@ -390,6 +407,9 @@ onMounted(() => {
   color: var(--text);
 }
 .face .count {
+  position: absolute;
+  top: 14px;
+  right: 14px;
   font-size: 12px;
   color: var(--muted);
 }
