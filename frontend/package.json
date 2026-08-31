@@ -15,7 +15,7 @@
     "echarts": "^5.6.0",
     "echarts-wordcloud": "^2.1.0",
     "element-plus": "^2.14.3",
-    "pinia": "^4.0.2",
+    "pinia": "^4.0.3",
     "vue": "^3.5.40",
     "vue-router": "^5.2.0"
   },
