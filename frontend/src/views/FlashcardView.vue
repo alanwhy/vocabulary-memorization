@@ -379,9 +379,9 @@ onMounted(() => {
 }
 .enrich {
   display: flex;
-  flex-wrap: wrap;
-  gap: 4px 10px;
-  justify-content: center;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
   font-size: 12px;
   color: var(--muted);
 }

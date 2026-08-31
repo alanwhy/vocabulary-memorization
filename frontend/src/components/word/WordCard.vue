@@ -266,8 +266,8 @@ function openLookup(e, word) {
 }
 .enrich {
   display: flex;
-  flex-wrap: wrap;
-  gap: 4px 12px;
+  flex-direction: column;
+  gap: 4px;
   margin-top: 2px;
   font-size: 12px;
   color: var(--muted);

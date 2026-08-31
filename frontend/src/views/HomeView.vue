@@ -186,7 +186,10 @@ onMounted(() => {
   <div>
     <LoginForm v-if="!auth.isAuthenticated" />
     <div v-else>
-      <h1>背单词</h1>
+      <div class="title-row">
+        <h1>背单词</h1>
+        <span class="version">v1.16.2</span>
+      </div>
       <div class="input-wrap">
         <el-input
           ref="wordInputRef"
@@ -228,11 +231,24 @@ onMounted(() => {
         @load-more="loadMore"
       />
     </div>
-    <div class="footer">v1.16.1</div>
   </div>
 </template>
 
 <style scoped>
+.title-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+.title-row h1 {
+  margin: 0;
+}
+.version {
+  font-size: 12px;
+  color: var(--muted);
+}
 .input-wrap {
   margin-bottom: 8px;
   display: flex;
