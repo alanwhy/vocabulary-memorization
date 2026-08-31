@@ -1,100 +1,151 @@
-# 背单词
+# 背单词 · Vocabulary Memorization
 
-极简的背单词网页：登录后输入英文单词回车（或点击「添加」）即记录，自动查词得到中文释义（含词性，一个词有多个词性会分别列出，同一词性的多条释义会合并成一条）。重复输入同一个词会累计背诵次数，每个词的次数徽标按 1/3/5/7/9/11 分成 6 档配色（浅绿 → 黄 → 橙 → 红 → 深红），扫一眼就知道哪些词背得最多。列表默认按背诵次数降序排列，也可以切换成按最近背诵时间或字母排序，排序方式会记在浏览器本地，刷新后依然生效。列表按每页 20 条从后端分页加载，往下滚动自动追加下一页。背完的单词可以归档，归档后不再出现在主列表，去归档页可以随时取消归档或彻底删除。每个账号的背单词记录互相隔离，手机和电脑用同一个账号登录看到的是同一份数据。深色/浅色主题由顶栏左侧的图标按钮手动切换（不跟随系统偏好），选择结果存在浏览器本地，换设备需要各自设置一次。
+一个极简的自托管背单词应用：录入单词即自动查词，得到带词性、音标、例句、词根词缀、近反义词和形近词的完整释义，配合间隔重复（SRS）闪卡和豆包语音朗读巩固记忆，多用户各自隔离，超管后台统一管理。
 
-## 用户体系
+![Go](https://img.shields.io/badge/Go-1.24+-00ADD8?logo=go&logoColor=white)
+![Vue](https://img.shields.io/badge/Vue-3.5-4FC08D?logo=vuedotjs&logoColor=white)
+![MySQL](https://img.shields.io/badge/MySQL-8-4479A1?logo=mysql&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)
+![License](https://img.shields.io/badge/License-暂无-999)
 
-- 应用整体需要登录才能使用，没有自助注册入口。
-- 首次启动会自动创建一个超管账号（用户名/密码见 `.env` 里的 `ADMIN_USERNAME` / `ADMIN_PASSWORD`，`./deploy.sh` 首次部署时会随机生成）。
-- 超管登录后可以在右上角「后台管理」（`/admin`）：
-  - 新增用户（可指定是否也是超管）
-  - 查看每个用户的创建时间、最后登录时间（从未登录过会显示「从未登录」）和录入单词数（含已归档）
-  - 重置任意用户的密码（重置后该用户所有已登录设备的会话立即失效，需要用新密码重新登录）
-  - 禁用/启用用户（禁用后该用户登录被拒、已有会话立即失效）或删除用户（需二次确认，连带删除其单词记录）
-  - 修改 DeepSeek 查词配置
-  - 查看全局词库（见下一节），按单词过滤，删除某个单词的缓存记录，也可对「暂无释义」的词条批量重新查询
-- 普通用户只能看到、操作自己的单词列表；在「个人中心」（`/profile`）可以看到自己的注册时间、最后登录时间和录入单词数，并修改密码。
-- 忘记密码可以联系超管重置，登录页也有联系方式提示。
+## 特性
 
-## 查词与全局词库缓存
+- 📝 **智能查词**：录入英文单词，自动查词得到中文释义（含词性，同一词性的多条释义自动合并）。附带音标、英文例句（含中文翻译）、词根词缀、近义词、反义词、形近词。
+- 🌐 **全站查词只查一次**：同一个单词无论被哪个用户输入，全站只向大模型查询一次，结果缓存进全局词库，后续任何人复用，秒回。
+- 🃏 **间隔重复闪卡**：简化版 SM-2 排期，三档自评（记住 / 模糊 / 不认识），反复忘的词优先出现，点「记住」自动归档。
+- 🔊 **语音朗读**：豆包（火山引擎）语音合成，查词成功后后台预生成发音，单词卡和闪卡正面一键点读。
+- 📊 **统计可视化**：ECharts 绘制背诵趋势、次数分布、近 7 天词云、开头字母统计，数据全部由后端 SQL 聚合。
+- 👥 **多用户 + 后台**：账号之间数据隔离；超管可增删用户、重置密码、禁用账号、管理全局词库与查词/语音配置。
+- 🌙 **深色主题**：手动切换深浅色，记忆在浏览器本地，不跟随系统。
 
-- 查词优先级：DeepSeek（如果已启用并配置）→ Google 免费翻译接口兜底。
-- 释义按词性拆开结构化存储，一个词有几个常见词性就展示几条；同一词性如果模型返回了多条释义，会自动合并成一条，用中文分号分隔。
-- **同一个单词，无论被哪个用户输入，全站范围内只会向大模型查询一次**：查到的释义会存进独立于用户单词表的全局词库（`word_dictionary` 表），后续任何用户（包括同一用户重新添加）第一次输入这个词，都会直接复用缓存、瞬间返回，不会重复请求接口。用户删除自己的单词只影响自己的列表，不会影响全局词库缓存；超管在后台删除某个单词的全局缓存，也只是清空缓存，不会影响任何用户已经保存在自己列表里的记录——下次有人再输入这个词会重新触发一次查词。
-- 查词是异步进行的：录入单词时立即入库并返回，不会等接口响应；释义会在后台查到后自动写回，前端此时在单词右侧显示「查询中...」。大模型会先判断单词拼写是否正确：拼写错误时释义位置显示「error：请检查单词拼写是否正常」；接口报错/超时会按退避间隔自动重试，多次仍失败则显示「error：查询失败」。出现 error 提示的单词，单词卡显示「重试」按钮而不是「归档」，点一下即可重新触发一次查词。
-- 后台管理页的「词库管理」可以看到全局词库里每个单词的出现次数（多少次被输入/背诵过，不局限于单个用户，配色和单词卡的次数徽标同一套）和最后更新时间。这张表也是后端分页（每页 20 条、滚动加载），顶部的过滤框由后端按关键字查询，不是只在当前页里找；「导出 CSV」不受分页影响，导的仍是全量。
+## 核心功能
+
+### 录入与查词
+
+- 登录后输入英文单词回车（或点「添加」）即记录，重复输入同一个词累计背诵次数。
+- 查词是**异步**的：录入立即入库返回，释义在后台查到后自动写回，期间显示「查询中...」。
+- 查词来源为 DeepSeek（可在后台配置 API Key / Base URL / 模型），会先校验拼写：拼写错误显示「请检查单词拼写是否正常」。
+- 失败按退避间隔自动重试（共 3 次尝试），仍失败则显示「查询失败，请稍后重试」；这类词显示「重试」按钮而非「归档」，点一下重新触发一次查词。
+- **全局词库缓存**：查到的释义存进独立于用户单词表的 `word_dictionary` 表，同一个单词全站只查一次。用户删除自己的单词只影响自己的列表；超管清空缓存也只清缓存，不影响任何人已保存的记录——下次再输入才重新查词。
+
+### 间隔重复闪卡
+
+- 到期单词进入闪卡队列，每组 30 张，本地翻卡自评，自评档位只有三档：
+
+| 档位 | 排期 | 结果 |
+|---|---|---|
+| 记住（good） | 间隔按难度系数倍增 | 直接归档 |
+| 模糊（hard） | 间隔 ×1.2，难度 −0.15 | 保持未归档，稍后重现 |
+| 不认识（again） | 间隔重置 1 天，难度 −0.20 | 保持未归档，次日再见 |
+
+- 难度系数收敛在 `[1.30, 2.50]`；队列按背诵次数降序优先，反复背反复忘的词最先出现。
+- 点「不认识」时，若该词已有释义但缺强化信息（老数据），后台会自动补一次查词。
+
+### 强化信息与点击查询
+
+- 释义按词性拆开展示；例句、近义词、反义词、形近词里的单词可以**点击查询**：弹出浮层展示该词的释义、音标、读音与例句，若不在你的词库里则自动录入一次。
+
+### 统计页
+
+总词汇量、累计背诵次数、今日背诵次数、次数分布、近 14 天新增趋势、近 7 天词云（按累计背诵次数加权）、开头字母统计，全部由 `GET /api/stats` 用 SQL 聚合，不下载全量单词到前端。
+
+### 用户体系与后台
+
+- 应用整体需登录，**没有自助注册入口**；首次启动自动创建超管账号（见 `.env`）。
+- 超管在 `/admin` 可：新增用户（可设超管）、查看创建/最后登录时间与录入数、重置密码、禁用/启用、删除（级联清理单词）；管理全局词库（过滤、删除、批量删除、对「暂无释义」词条重新查询、导出 CSV）；修改 DeepSeek 查词与豆包语音配置。
+- 普通用户在 `/profile` 可改密码、重置背诵次数，查看自己的注册/最后登录时间与录入数。
+
+## 技术栈
+
+| 层 | 技术 |
+|---|---|
+| 后端 | Go 1.24+（标准库 `net/http` 方法路由，无第三方 web 框架）、`go-sql-driver/mysql`、`golang.org/x/crypto/bcrypt` |
+| 前端 | Vue 3 + Vite、Vue Router（history 模式）、Pinia、Element Plus、ECharts + echarts-wordcloud |
+| 数据库 | MySQL 8，数据存 Docker volume，结构变更写成幂等迁移随容器启动自动执行 |
+| 认证 | Bearer Token（登录返回 `{ token, user }`，前端存 localStorage，请求带 `Authorization` 头），会话 30 天滑动续期，重置密码/禁用账号即时失效 |
+| 语音 | 豆包（火山引擎 BytePlus Seed Speech）语音合成，音频落盘 `audio/` 目录并由 volume 持久化 |
+
+## 快速开始
+
+### 方式一：Docker Compose（一条命令跑整套）
+
+```bash
+# 仓库根目录，首次可直接跑 ./deploy.sh 自动生成 .env（随机数据库密码、超管密码）
+docker compose up -d --build
+```
+
+- 访问 `http://localhost:39100`，用 `.env` 里的 `ADMIN_USERNAME` / `ADMIN_PASSWORD` 登录。
+- `.env` 已加入 `.gitignore`（含数据库密码、超管密码、DeepSeek Key），换机器部署记得一起拷贝。
+- 前端产物构建进镜像，改前端代码需 `--build` 重建才能看到效果。
+
+### 方式二：本地开发（前端热更新）
+
+完整步骤（起 MySQL 容器、`go run` 后端、`npm run dev` 前端）、环境变量表、测试命令、代码约定与发版流程，见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+
+```bash
+# 后端
+cd backend
+DB_HOST=127.0.0.1 DB_PORT=3306 DB_USER=vocab DB_PASSWORD=devpass DB_NAME=vocab \
+  ADMIN_USERNAME=admin ADMIN_PASSWORD=admin123456 go run .
+
+# 前端（另开终端）
+cd frontend
+npm install && npm run dev
+```
+
+> ⚠️ 本地必须先在空库里导入 `backend/schema.sql`（`words` 表只在里面定义，Go 迁移不建这张表）。
+
+### 常用命令
+
+```bash
+docker compose logs -f backend   # 看后端日志（查词/语音报错、启动报错都在这里）
+docker compose logs -f mysql     # 看数据库日志
+docker compose down              # 停止服务（数据库数据保留在 volume 里）
+docker compose down -v           # 停止并清空数据库数据（慎用）
+```
 
 ## 目录结构
 
 ```
 vocabulary-memorization/
 ├── backend/                   Go 后端源码
-│   ├── main.go                  路由 + 单词录入/分页列表/删除/归档接口 + 统计聚合接口
-│   ├── store.go                 所有 SQL 都收在这里（repository 层），含分页、排序白名单、统计聚合
-│   ├── app.go                   App 结构体 + 各 repository 的窄接口定义（便于测试替换成 fake）
+│   ├── main.go                  路由注册 + 单词录入/列表/归档/删除/闪卡/统计接口
+│   ├── store.go                 所有 SQL 收在这里（repository 层）：分页、排序白名单、统计聚合
+│   ├── app.go                   App 结构体 + 各 repository 的窄接口（便于测试替换成 fake）
 │   ├── db.go                    MySQL 连接 + 幂等数据库迁移（含历史数据回填、词性合并修复）
-│   ├── auth.go                  登录/登出/会话中间件、超管账号引导、用户管理与密码重置接口
-│   ├── dictionary.go            全局词库缓存的读写、出现次数统计、管理员查看与删除接口
-│   ├── settings.go              DeepSeek 配置的读写与内存缓存
+│   ├── auth.go                  登录/登出、Bearer Token 中间件、超管引导、用户管理与密码重置
+│   ├── dictionary.go            全局词库缓存的读写、出现次数统计、管理员查看与删除
+│   ├── settings.go              DeepSeek 查词 + 豆包语音配置的读写与内存缓存
 │   ├── deepseek.go              调用 DeepSeek 查词
-│   ├── translate.go             翻译逻辑：DeepSeek -> 在线接口兜底，失败重试由 main.go 调度
-│   ├── models.go                数据结构 + 同词性释义合并逻辑
+│   ├── doubao.go / pronunciation.go   豆包语音合成与发音接口
+│   ├── translate.go            查词编排：重试调度、拼写校验、释义写回
+│   ├── middleware.go / ratelimit.go    panic 恢复中间件、登录/改密失败限流
+│   ├── models.go               数据结构、同词性释义合并、SRS 排期算法
 │   ├── schema.sql                 数据库表结构
 │   ├── static/                    前端构建产物（`frontend/` 构建后生成，不进 git）
 │   └── Dockerfile                 多阶段构建：先构建 frontend/ 产物，再编译 Go 二进制
 ├── frontend/                   Vue 3 + Vite 单页应用源码
 │   ├── vite.config.js            开发环境把 /api 代理到本地 Go 后端
-│   ├── src/api/client.js         统一 fetch 封装（凭证、401 跳转、错误归一化）
+│   ├── src/api/client.js         统一 fetch 封装（Bearer 凭证、401 跳转、错误归一化）
 │   ├── src/stores/auth.js        Pinia 鉴权 store
 │   ├── src/router/index.js       Vue Router（history 模式）+ 鉴权守卫
-│   ├── src/components/           AppTopbar、WordCard/WordList、Admin 子组件等共享组件
-│   ├── src/composables/          分页状态机、滚动加载、主题开关、查词轮询、单词操作等可复用逻辑
-│   ├── src/utils/                时间格式化、次数档位映射等纯函数
-│   └── src/views/                首页/归档/个人中心/统计/后台管理五个路由页面
+│   ├── src/components/           AppTopbar、WordCard/WordList、Admin 子组件等（按 admin/auth/layout/profile/word 分目录）
+│   ├── src/composables/          分页状态机、滚动加载、主题、查词轮询、语音、点击查询等可复用逻辑
+│   ├── src/utils/                时间格式化、次数档位映射、例句高亮等纯函数
+│   └── src/views/                首页/闪卡/归档/个人中心/统计/后台管理六个路由页面
 ├── docker-compose.yml          编排 MySQL + 后端两个容器（构建上下文为仓库根目录）
-├── deploy.sh                    一键部署/更新脚本（首次部署用）
-├── DEPLOYMENT.md                 当前服务器的实际部署与更新流程（比这份 README 更详细、更贴近实操）
-├── CONTRIBUTING.md               开发者指南：本地启动、测试、代码约定、发版流程
-├── CHANGELOG.md                  版本变更记录
-└── README.md
+├── deploy.sh                    一键部署脚本（首次部署用，自动生成 .env）
+└── *.md                         文档，见下方「文档」
 ```
 
-## 技术说明
+## 文档
 
-- 后端：Go（标准库 `net/http` 路由 + `go-sql-driver/mysql` + `golang.org/x/crypto/bcrypt`），无第三方 web 框架。
-- 数据库：MySQL 8，数据存在 Docker volume 里，容器重启不丢数据。所有表结构变更（加表、加列）和历史数据修复都写成幂等迁移，随后端容器启动自动执行，不需要手工跑 SQL。
-- 认证：登录后用 HttpOnly Cookie 保存会话 token，会话有效期 30 天并会随访问自动续期；重置密码会让该用户所有旧会话立即失效。
-- 翻译：先查 DeepSeek（未配置或调用失败会跳过）→ 再调用 Google 免费翻译接口兜底；两个来源都失败会自动重试，仅在多次重试后仍失败才留空。同一单词全站只查一次，结果进全局词库缓存供所有用户复用。
-- 前端：`frontend/` 下的 Vue 3 + Vite 单页应用，Vue Router（history 模式）+ Pinia，Element Plus 组件库。`npm run build` 产物打进 `backend/static/`，由 Go 后端统一提供静态资源和 SPA 深链接回退（`/profile`、`/admin` 等路径刷新不会 404）。
-- 分页：单词列表和后台词库表都是后端分页（`page`/`limit`，每页 20 条，上限 200），响应统一是 `{items, total, page, limit, has_more}` 信封。排序也在后端做，`sort` 参数走白名单映射成固定的 `ORDER BY` 片段（请求参数绝不拼进 SQL），且每种排序都以 `id` 收尾——否则按不唯一的列翻页会出现跨页重复或漏词。前端用 `IntersectionObserver` 哨兵触发下一页，而不是监听滚动事件。
-- 统计：统计页的数值由 `GET /api/stats` 用 SQL 聚合算出（总词汇量、累计背诵次数、次数分布、近 14 天新增），不再把全量单词下载到前端再算。
-- 主题：`html.dark` class 控制一整套 CSS 变量，class 由 `localStorage` 里的记录决定（默认浅色）。`index.html` 里有一小段内联脚本在样式生效前就把 class 加上，深色用户刷新时不会闪一帧白；Element Plus 的深色变量也挂在 `html.dark` 上，正好共用同一个开关。
+| 文档 | 内容 |
+|---|---|
+| [CONTRIBUTING.md](CONTRIBUTING.md) | 开发者指南：本地启动、环境变量、测试、代码约定、发版流程 |
+| [DEPLOYMENT.md](DEPLOYMENT.md) | 当前生产服务器的实际部署与更新流程（rsync、备份、端口、代理镜像等实操细节） |
+| [CHANGELOG.md](CHANGELOG.md) | 每个版本的变更记录（Keep a Changelog 格式） |
 
-**想在本地把这套服务跑起来改代码**（含开发模式热更新、测试命令、代码约定、发版流程）→ [CONTRIBUTING.md](CONTRIBUTING.md)。
+## License
 
-## 部署到服务器
-
-首次部署到一台新服务器：
-
-1. 把整个 `vocabulary-memorization` 文件夹上传到服务器，比如 `/root/vocabulary-memorization`（`scp -r` 或 `rsync`）。
-2. SSH 登录服务器，进入目录后执行：
-   ```bash
-   cd /root/vocabulary-memorization
-   chmod +x deploy.sh
-   ./deploy.sh
-   ```
-3. 脚本会自动生成随机数据库密码、超管密码（存进 `.env`，同时预填 DeepSeek 的 Key/Base URL/模型，之后可在后台管理页面改），然后执行 `docker compose up -d --build`，构建后端镜像并启动 MySQL + 后端两个容器。
-4. 部署完成后浏览器访问服务器地址（端口看 `docker-compose.yml` 里的映射），用 `.env` 里的 `ADMIN_USERNAME`/`ADMIN_PASSWORD` 登录超管账号。
-
-`.env` 已加入 `.gitignore`，不会被提交到仓库（里面是数据库密码、超管密码、DeepSeek API Key），换新机器部署时记得把这个文件也一起拷过去，不然会重新生成一套新的密码/账号。
-
-**已经部署过一次之后如何更新代码、当前生产服务器（101.42.45.60）的具体端口/网络等细节、涉及数据库结构变更时建议怎么操作** —— 这些实操细节以 [DEPLOYMENT.md](DEPLOYMENT.md) 为准，那份文档记录的是这台服务器上实际验证过、踩过坑之后的流程，比这里的通用说明更可靠。
-
-### 常用命令
-
-```bash
-docker compose logs -f backend   # 看后端日志（翻译接口报错、启动报错都在这里）
-docker compose logs -f mysql     # 看数据库日志
-docker compose down              # 停止服务
-docker compose down -v           # 停止并清空数据库数据（慎用）
-```
+当前仓库暂未指定开源许可证。如需公开，建议补一份 [LICENSE](../LICENSE)（如 MIT / Apache-2.0）并在 `.gitignore`、`.env.example` 等敏感配置上做一次审查。
