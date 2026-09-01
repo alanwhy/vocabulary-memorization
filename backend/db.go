@@ -116,6 +116,7 @@ func migrateSchema() {
 	migrateWordsArchivedColumn()
 	migrateWordsUserArchivedIndex()
 	migrateWordsSRSColumns()
+	migrateWordsImportantGlossesColumn()
 	migrateUsersLastLoginColumn()
 	migrateUsersDisabledColumn()
 	mergeHistoricalWordSenses()
@@ -209,6 +210,16 @@ func migrateWordsSRSColumns() {
 	if !columnExists("words", "ease_factor") {
 		mustExec(`ALTER TABLE words ADD COLUMN ease_factor DECIMAL(4,2) NOT NULL DEFAULT 2.50`)
 	}
+}
+
+// migrateWordsImportantGlossesColumn 给 words 表补 important_glosses 列，存用户标记的「重要释义」义项文本数组。
+// 与 senses 分列存放：senses 是 LLM 生成的释义、会被后台查词整段覆盖，而重要标记是用户手标、
+// 独立读写，分列才能保证重查/补全不会冲掉标记。
+func migrateWordsImportantGlossesColumn() {
+	if columnExists("words", "important_glosses") {
+		return
+	}
+	mustExec(`ALTER TABLE words ADD COLUMN important_glosses JSON NULL`)
 }
 
 // mergeHistoricalWordSenses 一次性把 words 表里历史遗留的、同词性被拆成多行的释义合并成一行；

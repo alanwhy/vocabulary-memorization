@@ -1,11 +1,12 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { apiGet, apiPost } from '@/api/client'
+import { apiGet, apiPost, apiPut } from '@/api/client'
 import { useVocabularyIndex } from '@/composables/useVocabularyIndex'
 import { useWordLookup } from '@/composables/useWordLookup'
 import { speakWord } from '@/composables/usePronunciation'
 import { tokenizeExample, splitWordRef } from '@/utils/highlight'
 import { countBadgeClass } from '@/utils/reviewLevel'
+import { splitGlosses } from '@/utils/gloss'
 
 const vocab = useVocabularyIndex()
 const lookup = useWordLookup()
@@ -38,6 +39,30 @@ const enrichGroups = computed(() => {
   ].filter((g) => g.refs.length)
 })
 const hasEnrichment = computed(() => !!(rootAffix.value || enrichGroups.value.length))
+// 背面每个词性拆分后的义项数组，与 current.senses 一一对应（下标相同）
+const senseGlosses = computed(() =>
+  (current.value?.senses || []).map((s) => splitGlosses(s.translation)),
+)
+// 当前词的「重要释义」义项集合，命中即加粗
+const importantSet = computed(() => new Set(current.value?.important_glosses || []))
+
+// 点击一个中文义项：切换它是否为「重要释义」，乐观更新 + 写回后端，失败回滚
+async function toggleGloss(gloss) {
+  const wd = current.value
+  if (!wd) return
+  const set = new Set(wd.important_glosses || [])
+  if (set.has(gloss)) set.delete(gloss)
+  else set.add(gloss)
+  const next = Array.from(set)
+  const prev = wd.important_glosses || []
+  wd.important_glosses = next
+  try {
+    await apiPut(`/api/words/${wd.id}/important`, { glosses: next })
+  } catch (e) {
+    wd.important_glosses = prev
+    error.value = e.message || '标记失败'
+  }
+}
 
 function hlClass(level) {
   return `hl-word hl-word--l${level}`
@@ -182,7 +207,15 @@ onMounted(() => {
             <div class="senses" v-if="current.senses && current.senses.length">
               <div class="sense" v-for="(s, i) in current.senses" :key="i">
                 <span class="pos" v-if="s.pos">{{ s.pos }}</span>
-                <span class="translation">{{ s.translation }}</span>
+                <span class="translation">
+                  <span
+                    v-for="(g, gi) in senseGlosses[i]"
+                    :key="gi"
+                    class="gloss"
+                    :class="{ 'gloss-important': importantSet.has(g) }"
+                    @click.stop="toggleGloss(g)"
+                  >{{ gi > 0 ? '；' : '' }}{{ g }}</span>
+                </span>
                 <span class="example" v-if="s.example || s.example_translation">
                   <span class="example-en" v-if="s.example">
                     <span
@@ -349,6 +382,14 @@ onMounted(() => {
 .sense .translation.pending {
   color: var(--muted);
   font-style: italic;
+}
+.sense .gloss {
+  cursor: pointer;
+}
+.sense .gloss-important {
+  font-weight: 700;
+  font-style: italic;
+  color: var(--danger);
 }
 .sense .example {
   display: flex;

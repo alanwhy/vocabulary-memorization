@@ -1,7 +1,8 @@
 <script setup>
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { ElMessage } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
-import { apiGet, apiPost } from '@/api/client'
+import { apiGet, apiPost, apiPut } from '@/api/client'
 import { usePaginatedList } from '@/composables/usePaginatedList'
 import { useWordActions } from '@/composables/useWordActions'
 import { useTranslatingPoll } from '@/composables/useTranslatingPoll'
@@ -65,6 +66,20 @@ function dropFromStats(w) {
 async function handleRetry(w) {
   const ok = await retryWord(w)
   if (ok) scheduleIfNeeded()
+}
+
+// 单词列表点义项标记/取消「重要释义」：乐观更新该词的重要义项，再写回后端，失败回滚
+async function handleSetImportant({ id, glosses }) {
+  const w = words.value.find((x) => x.id === id)
+  if (!w) return
+  const prev = w.important_glosses || []
+  w.important_glosses = glosses
+  try {
+    await apiPut(`/api/words/${id}/important`, { glosses })
+  } catch (e) {
+    w.important_glosses = prev
+    ElMessage.error(e.message || '标记失败')
+  }
 }
 
 async function loadStats() {
@@ -188,7 +203,7 @@ onMounted(() => {
     <div v-else>
       <div class="title-row">
         <h1>背单词</h1>
-        <span class="version">v1.16.3</span>
+        <span class="version">v1.17.0</span>
       </div>
       <div class="input-wrap">
         <el-input
@@ -228,6 +243,7 @@ onMounted(() => {
         @archive="archiveWord"
         @delete="deleteWord"
         @retry="handleRetry"
+        @set-important="handleSetImportant"
         @load-more="loadMore"
       />
     </div>

@@ -119,20 +119,51 @@ func mergeSensesByPos(senses []Sense) []Sense {
 
 // Word 对应数据库 words 表的一条记录
 type Word struct {
-	ID             int       `json:"id"`
-	WordKey        string    `json:"word_key"`
-	DisplayWord    string    `json:"display_word"`
-	Senses         []Sense   `json:"senses"`
-	Translating    bool      `json:"translating"`
-	Archived       bool      `json:"archived"`
-	ReviewCount    int       `json:"review_count"`
-	FirstAddedAt   time.Time `json:"first_added_at"`
-	LastReviewedAt time.Time `json:"last_reviewed_at"`
+	ID          int     `json:"id"`
+	WordKey     string  `json:"word_key"`
+	DisplayWord string  `json:"display_word"`
+	Senses      []Sense `json:"senses"`
+	// ImportantGlosses 用户标记的「重要释义」义项文本列表。与 Senses 分列：Senses 是 LLM 生成的
+	// 释义（后台查词会整段覆盖），这里是用户手标、独立读写，读侧由 scanWordRows 归一为非 nil 空数组。
+	ImportantGlosses []string  `json:"important_glosses"`
+	Translating      bool      `json:"translating"`
+	Archived         bool      `json:"archived"`
+	ReviewCount      int       `json:"review_count"`
+	FirstAddedAt     time.Time `json:"first_added_at"`
+	LastReviewedAt   time.Time `json:"last_reviewed_at"`
 	// 间隔重复（SRS）排期状态：DueAt 为下次到期时间（NULL = 从未用闪卡复习过，视为新词立即到期），
 	// IntervalDays 为当前间隔天数，EaseFactor 为难度系数（区间 [1.30, 2.50]）。
 	DueAt        *time.Time `json:"due_at"`
 	IntervalDays int        `json:"interval_days"`
 	EaseFactor   float64    `json:"ease_factor"`
+}
+
+// normalizeGlosses 规范化前端传来的「重要释义」义项列表：逐个去首尾空格、丢弃空串、去重，
+// 单条超长按 rune 截断、总数超上限截断，保证落库内容干净且长度可控。返回的数组可能为空但非 nil。
+func normalizeGlosses(in []string) []string {
+	const (
+		maxGlossLen   = 200
+		maxGlossCount = 20
+	)
+	out := make([]string, 0, len(in))
+	seen := make(map[string]bool, len(in))
+	for _, g := range in {
+		g = strings.TrimSpace(g)
+		if g == "" || seen[g] {
+			continue
+		}
+		runes := []rune(g)
+		if len(runes) > maxGlossLen {
+			runes = runes[:maxGlossLen]
+			g = string(runes)
+		}
+		seen[g] = true
+		out = append(out, g)
+		if len(out) >= maxGlossCount {
+			break
+		}
+	}
+	return out
 }
 
 // applySRSScheduling 根据一次闪卡自评结果算出下一个复习间隔（天）和新的难度系数。

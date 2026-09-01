@@ -87,6 +87,7 @@ func main() {
 	mux.HandleFunc("POST /api/words/{id}/archive", withTimeout(defaultRequestTimeout)(app.requireAuth(app.handleArchiveWord)))
 	mux.HandleFunc("POST /api/words/{id}/unarchive", withTimeout(defaultRequestTimeout)(app.requireAuth(app.handleUnarchiveWord)))
 	mux.HandleFunc("POST /api/words/{id}/retry", withTimeout(defaultRequestTimeout)(app.requireAuth(app.handleRetryWord)))
+	mux.HandleFunc("PUT /api/words/{id}/important", withTimeout(defaultRequestTimeout)(app.requireAuth(app.handleSetWordImportant)))
 	mux.HandleFunc("GET /api/flashcards/queue", withTimeout(defaultRequestTimeout)(app.requireAuth(app.handleFlashcardQueue)))
 	mux.HandleFunc("POST /api/flashcards/review", withTimeout(defaultRequestTimeout)(app.requireAuth(app.handleFlashcardReview)))
 	mux.HandleFunc("GET /api/pronounce/{wordKey}", withTimeout(defaultRequestTimeout)(app.requireAuth(app.handlePronounce)))
@@ -215,14 +216,15 @@ func (a *App) handleAddWord(w http.ResponseWriter, r *http.Request) {
 	}
 
 	newWord := Word{
-		ID:             wordID,
-		WordKey:        wordKey,
-		DisplayWord:    raw,
-		Senses:         initialSenses,
-		Translating:    translating,
-		ReviewCount:    1,
-		FirstAddedAt:   now,
-		LastReviewedAt: now,
+		ID:               wordID,
+		WordKey:          wordKey,
+		DisplayWord:      raw,
+		Senses:           initialSenses,
+		ImportantGlosses: []string{},
+		Translating:      translating,
+		ReviewCount:      1,
+		FirstAddedAt:     now,
+		LastReviewedAt:   now,
 	}
 	writeJSON(w, http.StatusCreated, newWord)
 }
@@ -729,6 +731,57 @@ func (a *App) handleRetryWord(w http.ResponseWriter, r *http.Request) {
 	}
 	a.spawnTranslation(id, wd.WordKey)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// importantGlossesRequest 设置某单词「重要释义」的请求：glosses 是被标记为重要的义项文本数组，全量覆盖
+type importantGlossesRequest struct {
+	Glosses []string `json:"glosses"`
+}
+
+// importantGlossesResponse 覆盖写成功后的返回：规范化后的义项列表，前端据此同步本地状态
+type importantGlossesResponse struct {
+	ID               int      `json:"id"`
+	ImportantGlosses []string `json:"important_glosses"`
+}
+
+// handleSetWordImportant 覆盖设置某单词的重要释义义项列表。重要标记是用户手标的个人数据，
+// 存 words.important_glosses 独立列，与 LLM 生成的 senses 分列，后台查词写回时不会被冲掉。
+func (a *App) handleSetWordImportant(w http.ResponseWriter, r *http.Request) {
+	user := currentUser(r)
+	id, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "无效的 id")
+		return
+	}
+
+	var req importantGlossesRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Glosses == nil {
+		writeError(w, http.StatusBadRequest, "请求格式不正确")
+		return
+	}
+	glosses := normalizeGlosses(req.Glosses)
+
+	list, err := a.words.FindByIDs(r.Context(), user.ID, []int{id})
+	if err != nil {
+		log.Printf("查询单词失败: %v", err)
+		writeError(w, http.StatusInternalServerError, "查询失败")
+		return
+	}
+	if len(list) == 0 {
+		writeError(w, http.StatusNotFound, "单词不存在")
+		return
+	}
+
+	glossesJSON, err := json.Marshal(glosses)
+	if err != nil {
+		glossesJSON = []byte("[]")
+	}
+	if err := a.words.UpdateImportantGlosses(r.Context(), id, user.ID, glossesJSON); err != nil {
+		log.Printf("更新重要释义失败: %v", err)
+		writeError(w, http.StatusInternalServerError, "更新失败")
+		return
+	}
+	writeJSON(w, http.StatusOK, importantGlossesResponse{ID: id, ImportantGlosses: glosses})
 }
 
 type createUserRequest struct {

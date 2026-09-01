@@ -6,12 +6,13 @@ import { useVocabularyIndex } from '@/composables/useVocabularyIndex'
 import { useWordLookup } from '@/composables/useWordLookup'
 import { speakWord } from '@/composables/usePronunciation'
 import { tokenizeExample, splitWordRef } from '@/utils/highlight'
+import { splitGlosses } from '@/utils/gloss'
 
 const props = defineProps({
   word: { type: Object, required: true },
   mode: { type: String, default: 'active' }, // 'active' | 'archived'
 })
-defineEmits(['archive', 'unarchive', 'delete', 'retry'])
+const emit = defineEmits(['archive', 'unarchive', 'delete', 'retry', 'set-important'])
 
 const vocab = useVocabularyIndex()
 const lookup = useWordLookup()
@@ -46,6 +47,20 @@ const enrichGroups = computed(() => {
   ].filter((g) => g.refs.length)
 })
 const hasEnrichment = computed(() => !!(rootAffix.value || enrichGroups.value.length))
+
+// 当前词的「重要释义」义项集合，命中即加粗
+const importantSet = computed(() => new Set(props.word.important_glosses || []))
+// 一个词性的中文释义按「；」拆成义项
+function glossItems(s) {
+  return splitGlosses(s.translation)
+}
+// 点击一个中文义项：计算新的全量义项列表并 emit 给父级处理（受控组件，不直接改 prop）
+function toggleGloss(gloss) {
+  const set = new Set(props.word.important_glosses || [])
+  if (set.has(gloss)) set.delete(gloss)
+  else set.add(gloss)
+  emit('set-important', { id: props.word.id, glosses: Array.from(set) })
+}
 
 // 高亮 class：命中词库的英文词按出现次数档位着色（1~6）
 function hlClass(level) {
@@ -104,7 +119,15 @@ function openLookup(e, word) {
       <div class="senses" v-else-if="validSenses.length">
         <div class="sense" v-for="(s, idx) in validSenses" :key="idx">
           <span class="pos" v-if="s.pos">{{ s.pos }}</span>
-          <span class="translation">{{ s.translation }}</span>
+          <span class="translation">
+            <span
+              v-for="(g, gi) in glossItems(s)"
+              :key="gi"
+              class="gloss"
+              :class="{ 'gloss-important': importantSet.has(g) }"
+              @click.stop="toggleGloss(g)"
+            >{{ gi > 0 ? '；' : '' }}{{ g }}</span>
+          </span>
           <span class="example" v-if="s.example || s.example_translation">
             <span class="example-en" v-if="s.example">
               <span
@@ -243,6 +266,14 @@ function openLookup(e, word) {
   font-style: italic;
 }
 .sense .translation.error {
+  color: var(--danger);
+}
+.sense .gloss {
+  cursor: pointer;
+}
+.sense .gloss-important {
+  font-weight: 700;
+  font-style: italic;
   color: var(--danger);
 }
 .error-label {

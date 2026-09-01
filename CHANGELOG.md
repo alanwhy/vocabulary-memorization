@@ -2,6 +2,11 @@
 
 本项目的版本变更记录，格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [1.17.0] - 2026-09-01
+
+### Added
+- 中文释义支持点击标记「重要释义」：闪卡背面与单词列表的每个中文义项（按「；」拆分的单个意思）可单独点击标记，被标记的义项加粗、斜体、红色突出显示；一个词可标多个，标记按用户隔离、不入全局词库（新增 `PUT /api/words/{id}/important` 接口与 `words.important_glosses` 列）
+
 ## [1.16.3] - 2026-09-01
 
 ### Changed

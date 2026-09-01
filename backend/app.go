@@ -52,6 +52,7 @@ type wordStore interface {
 	DeleteByWordKeys(ctx context.Context, wordKeys []string) (int64, error)
 	SetArchived(ctx context.Context, id, userID int, archived bool) (int64, error)
 	UpdateSenses(ctx context.Context, id int, sensesJSON []byte) error
+	UpdateImportantGlosses(ctx context.Context, id, userID int, glossesJSON []byte) error
 	MarkTranslationStarted(ctx context.Context, id int, now time.Time) error
 	MarkTranslating(ctx context.Context, id int, now time.Time) error
 	FindTranslating(ctx context.Context) ([]Word, error)

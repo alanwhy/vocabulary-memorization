@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS words (
   word_key VARCHAR(255) NOT NULL,
   display_word VARCHAR(255) NOT NULL,
   senses JSON,
+  important_glosses JSON,
   translating TINYINT(1) NOT NULL DEFAULT 0,
   translation_started_at DATETIME NULL,
   archived TINYINT(1) NOT NULL DEFAULT 0,

@@ -203,7 +203,7 @@ func (r *sessionRepo) DeleteByUserExcept(ctx context.Context, userID int, except
 }
 
 // wordColumns words 表的完整列清单，配合 scanWordRows 使用，保证列顺序和扫描顺序一致
-const wordColumns = `id, word_key, display_word, senses, translating, archived, review_count, first_added_at, last_reviewed_at, due_at, interval_days, ease_factor`
+const wordColumns = `id, word_key, display_word, senses, important_glosses, translating, archived, review_count, first_added_at, last_reviewed_at, due_at, interval_days, ease_factor`
 
 // scanWordRows 按 wordColumns 的列顺序把结果集扫成 []Word 并解开 senses JSON
 func scanWordRows(rows *sql.Rows) ([]Word, error) {
@@ -213,13 +213,21 @@ func scanWordRows(rows *sql.Rows) ([]Word, error) {
 	for rows.Next() {
 		var wd Word
 		var sensesRaw []byte
+		var importantRaw []byte
 		var dueAt sql.NullTime
-		if err := rows.Scan(&wd.ID, &wd.WordKey, &wd.DisplayWord, &sensesRaw, &wd.Translating, &wd.Archived, &wd.ReviewCount, &wd.FirstAddedAt, &wd.LastReviewedAt, &dueAt, &wd.IntervalDays, &wd.EaseFactor); err != nil {
+		if err := rows.Scan(&wd.ID, &wd.WordKey, &wd.DisplayWord, &sensesRaw, &importantRaw, &wd.Translating, &wd.Archived, &wd.ReviewCount, &wd.FirstAddedAt, &wd.LastReviewedAt, &dueAt, &wd.IntervalDays, &wd.EaseFactor); err != nil {
 			return nil, err
 		}
 		wd.DueAt = nullTimePtr(dueAt)
 		if len(sensesRaw) > 0 {
 			if err := json.Unmarshal(sensesRaw, &wd.Senses); err != nil {
+				return nil, err
+			}
+		}
+		// important_glosses 为 NULL/空时归一为空的非 nil 切片，前端无需判 null
+		wd.ImportantGlosses = []string{}
+		if len(importantRaw) > 0 {
+			if err := json.Unmarshal(importantRaw, &wd.ImportantGlosses); err != nil {
 				return nil, err
 			}
 		}
@@ -264,14 +272,22 @@ func (r *wordRepo) Insert(ctx context.Context, userID int, wordKey, displayWord 
 	return int(id), nil
 }
 
-// FindByUserAndKey 未找到时 err 为 sql.ErrNoRows
+// FindByUserAndKey 未找到时 err 为 sql.ErrNoRows；senses 以原始字节返回供调用方判强化，
+// important_glosses 直接反序列化进 wd（调用方可能要把这个词原样返回给前端）。
 func (r *wordRepo) FindByUserAndKey(ctx context.Context, userID int, wordKey string) (Word, []byte, error) {
 	var wd Word
 	var sensesRaw []byte
+	var importantRaw []byte
 	err := r.db.QueryRowContext(ctx,
-		`SELECT id, word_key, display_word, senses, translating, archived, review_count, first_added_at, last_reviewed_at FROM words WHERE user_id = ? AND word_key = ?`,
+		`SELECT id, word_key, display_word, senses, important_glosses, translating, archived, review_count, first_added_at, last_reviewed_at FROM words WHERE user_id = ? AND word_key = ?`,
 		userID, wordKey,
-	).Scan(&wd.ID, &wd.WordKey, &wd.DisplayWord, &sensesRaw, &wd.Translating, &wd.Archived, &wd.ReviewCount, &wd.FirstAddedAt, &wd.LastReviewedAt)
+	).Scan(&wd.ID, &wd.WordKey, &wd.DisplayWord, &sensesRaw, &importantRaw, &wd.Translating, &wd.Archived, &wd.ReviewCount, &wd.FirstAddedAt, &wd.LastReviewedAt)
+	wd.ImportantGlosses = []string{}
+	if err == nil && len(importantRaw) > 0 {
+		if uerr := json.Unmarshal(importantRaw, &wd.ImportantGlosses); uerr != nil {
+			return wd, sensesRaw, uerr
+		}
+	}
 	return wd, sensesRaw, err
 }
 
@@ -405,6 +421,13 @@ func (r *wordRepo) SetArchived(ctx context.Context, id, userID int, archived boo
 
 func (r *wordRepo) UpdateSenses(ctx context.Context, id int, sensesJSON []byte) error {
 	_, err := r.db.ExecContext(ctx, `UPDATE words SET senses = ?, translating = 0 WHERE id = ?`, sensesJSON, id)
+	return err
+}
+
+// UpdateImportantGlosses 覆盖写某单词的「重要释义」义项列表。WHERE 同时限定 id 与 user_id，
+// 只更新当前用户自己的词；与 senses 分列，后台查词写回 senses 时不会触碰这一列。
+func (r *wordRepo) UpdateImportantGlosses(ctx context.Context, id, userID int, glossesJSON []byte) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE words SET important_glosses = ? WHERE id = ? AND user_id = ?`, glossesJSON, id, userID)
 	return err
 }
 
