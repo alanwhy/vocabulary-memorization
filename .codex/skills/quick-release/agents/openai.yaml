@@ -1,0 +1,7 @@
+interface:
+  display_name: "快速上线"
+  short_description: "更新版本与文档后推送并部署到生产环境"
+  default_prompt: "使用 $quick-release 快速上线当前改动。"
+
+policy:
+  allow_implicit_invocation: true
