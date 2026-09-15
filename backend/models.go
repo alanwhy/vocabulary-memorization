@@ -167,17 +167,19 @@ func normalizeGlosses(in []string) []string {
 }
 
 // applySRSScheduling 根据一次闪卡自评结果算出下一个复习间隔（天）和新的难度系数。
-// rating 只能是 good / hard / again，与前端三个评分按钮一一对应，采用简化版 SM-2：
+// rating 只能是 good / hard / fuzzy / again，与前端四个评分按钮一一对应，采用简化版 SM-2：
 //   - good：间隔按难度系数倍增（首次为 1 天），难度不变
 //   - hard：间隔按 1.2 倍小幅增长（至少 1 天），难度下降 0.15
+//   - fuzzy：看例句后认出，间隔按 1.1 倍增长，难度下降 0.10
 //   - again：间隔重置回 1 天（明天再见），难度下降 0.20
 //
 // 难度系数始终收敛在 [1.30, 2.50] 并保留两位小数，避免越界或精度抖动。
 func applySRSScheduling(intervalDays int, easeFactor float64, rating string) (int, float64) {
 	const (
-		minEase    = 1.30
-		maxEase    = 2.50
-		hardFactor = 1.2
+		minEase     = 1.30
+		maxEase     = 2.50
+		hardFactor  = 1.2
+		fuzzyFactor = 1.1
 	)
 
 	switch rating {
@@ -187,6 +189,13 @@ func applySRSScheduling(intervalDays int, easeFactor float64, rating string) (in
 			intervalDays = 1
 		}
 		easeFactor -= 0.15
+	case "fuzzy":
+		// 模糊应比“不认识”更晚复习；向上取整避免 2 天 × 1.1 又落回 2 天而没有增长。
+		intervalDays = int(math.Ceil(float64(intervalDays) * fuzzyFactor))
+		if intervalDays < 1 {
+			intervalDays = 1
+		}
+		easeFactor -= 0.10
 	case "again":
 		intervalDays = 1
 		easeFactor -= 0.20

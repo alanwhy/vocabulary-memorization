@@ -82,6 +82,7 @@ func main() {
 	mux.HandleFunc("GET /api/words/translating", withTimeout(defaultRequestTimeout)(app.requireAuth(app.handleListTranslatingWords)))
 	mux.HandleFunc("GET /api/words/lookup", withTimeout(defaultRequestTimeout)(app.requireAuth(app.handleLookupWord)))
 	mux.HandleFunc("GET /api/vocabulary", withTimeout(defaultRequestTimeout)(app.requireAuth(app.handleVocabularyIndex)))
+	mux.HandleFunc("GET /api/review-colors", withTimeout(defaultRequestTimeout)(app.requireAuth(app.handleReviewColors)))
 	mux.HandleFunc("GET /api/stats", withTimeout(defaultRequestTimeout)(app.requireAuth(app.handleWordStats)))
 	mux.HandleFunc("DELETE /api/words/{id}", withTimeout(defaultRequestTimeout)(app.requireAuth(app.handleDeleteWord)))
 	mux.HandleFunc("POST /api/words/{id}/archive", withTimeout(defaultRequestTimeout)(app.requireAuth(app.handleArchiveWord)))
@@ -571,9 +572,14 @@ type flashcardReviewRequest struct {
 	Rating string `json:"rating"`
 }
 
-// validFlashcardRating 校验自评档位，只接受三个合法值，非法值一律拒绝
+// validFlashcardRating 校验自评档位，只接受四个合法值，非法值一律拒绝。
 func validFlashcardRating(rating string) bool {
-	return rating == "good" || rating == "hard" || rating == "again"
+	return rating == "good" || rating == "hard" || rating == "fuzzy" || rating == "again"
+}
+
+// handleReviewColors 只暴露非敏感的渐变配置给登录用户；写入仍由管理员设置接口负责。
+func (a *App) handleReviewColors(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, a.getReviewColorConfig())
 }
 
 // handleFlashcardQueue 返回当前用户到期闪卡队列的一组（最多 flashcardGroupSize 张），前端本地翻卡自评
@@ -618,7 +624,7 @@ func (a *App) handleFlashcardReview(w http.ResponseWriter, r *http.Request) {
 	intervalDays, easeFactor := applySRSScheduling(wd.IntervalDays, wd.EaseFactor, req.Rating)
 	dueAt := now.AddDate(0, 0, intervalDays)
 	newCount := wd.ReviewCount + 1
-	// 「记住」直接归档（学完不再复习），模糊/不认识保持未归档、按 SRS 排期
+	// 「记住」直接归档（学完不再复习），困难/模糊/不认识保持未归档、按 SRS 排期
 	archived := req.Rating == "good"
 
 	if err := a.words.ApplyFlashcardReview(r.Context(), req.ID, user.ID, newCount, intervalDays, easeFactor, dueAt, now, archived); err != nil {

@@ -1,7 +1,8 @@
 <script setup>
 import { computed, onMounted } from 'vue'
 import { formatTime } from '@/utils/format'
-import { countBadgeClass } from '@/utils/reviewLevel'
+import { countBadgeClass, reviewColorStyle } from '@/utils/reviewLevel'
+import { useReviewColors } from '@/composables/useReviewColors'
 import { useVocabularyIndex } from '@/composables/useVocabularyIndex'
 import { useWordLookup } from '@/composables/useWordLookup'
 import { speakWord } from '@/composables/usePronunciation'
@@ -16,7 +17,11 @@ const emit = defineEmits(['archive', 'unarchive', 'delete', 'retry', 'set-import
 
 const vocab = useVocabularyIndex()
 const lookup = useWordLookup()
-onMounted(vocab.ensure)
+const { reviewColors, ensureReviewColors } = useReviewColors()
+onMounted(() => {
+  vocab.ensure()
+  ensureReviewColors()
+})
 
 // 错误态：释义里含占位性质的 sense（新版拼写错误/查询失败用 pos === 'error'，旧版查询失败用 pos === '系统提示'）。
 // 前端据此显示重试而非归档，且重试按钮对所有用户（含管理员）都生效——判断只依赖单词状态，不依赖身份。
@@ -62,13 +67,8 @@ function toggleGloss(gloss) {
   emit('set-important', { id: props.word.id, glosses: Array.from(set) })
 }
 
-// 高亮 class：命中词库的英文词按出现次数档位着色（1~6）
-function hlClass(level) {
-  return `hl-word hl-word--l${level}`
-}
-
 function exampleTokens(s) {
-  return tokenizeExample(s.example || '', vocab.lookup, props.word.word_key)
+  return tokenizeExample(s.example || '', vocab.lookup)
 }
 
 // 点击例句里的某个 token：单词打开查词 tooltip，非单词忽略
@@ -102,7 +102,7 @@ function openLookup(e, word) {
         </button>
       </div>
       <div class="word-meta">
-        <span :class="countBadgeClass(word.review_count)">×{{ word.review_count }}</span>
+        <span :class="countBadgeClass(word.review_count)" :style="reviewColorStyle(word.review_count, reviewColors)">×{{ word.review_count }}</span>
         <span class="time">{{ formatTime(word.last_reviewed_at) }}</span>
       </div>
     </div>
@@ -133,7 +133,8 @@ function openLookup(e, word) {
               <span
                 v-for="(t, i) in exampleTokens(s)"
                 :key="i"
-                :class="[t.isWord ? 'lookup-word' : '', t.level ? hlClass(t.level) : '']"
+                :class="[t.isWord ? 'lookup-word' : '', t.count ? 'hl-word' : '']"
+                :style="t.count ? reviewColorStyle(t.count, reviewColors) : undefined"
                 @click="onTokenClick($event, t)"
               >{{ t.text }}</span>
             </span>
@@ -149,7 +150,7 @@ function openLookup(e, word) {
           <span class="enrich-label">词根词缀：</span>{{ rootAffix }}
         </span>
         <span v-for="g in enrichGroups" :key="g.label">
-          <span class="enrich-label">{{ g.label }}：</span><span v-for="(r, i) in g.refs" :key="i">{{ i > 0 ? '、' : '' }}<span class="lookup-word" @click="openLookup($event, r.word)">{{ r.word }}</span>{{ r.rest }}</span>
+          <span class="enrich-label">{{ g.label }}：</span><span v-for="(r, i) in g.refs" :key="i">{{ i > 0 ? '、' : '' }}<span class="lookup-word" :class="{ 'known-word': vocab.lookup(r.word.toLowerCase()) }" @click="openLookup($event, r.word)">{{ r.word }}</span>{{ r.rest }}</span>
         </span>
       </div>
     </div>

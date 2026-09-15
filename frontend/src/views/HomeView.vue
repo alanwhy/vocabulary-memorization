@@ -203,7 +203,7 @@ onMounted(() => {
     <div v-else>
       <div class="title-row">
         <h1>背单词</h1>
-        <span class="version">v1.17.0</span>
+        <span class="version">v1.18.0</span>
       </div>
       <div class="input-wrap">
         <el-input

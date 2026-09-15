@@ -5,10 +5,12 @@ import { apiGet, apiDelete, apiPost, getToken } from '@/api/client'
 import { usePaginatedList } from '@/composables/usePaginatedList'
 import { useInfiniteScroll } from '@/composables/useInfiniteScroll'
 import { formatTime } from '@/utils/format'
-import { countBadgeClass } from '@/utils/reviewLevel'
+import { countBadgeClass, reviewColorStyle } from '@/utils/reviewLevel'
+import { useReviewColors } from '@/composables/useReviewColors'
 
 const dictFilter = ref('')
 const statusFilter = ref('')
+const { reviewColors, ensureReviewColors } = useReviewColors()
 
 // 过滤交给后端：词库可能有上万条，本地过滤前提是先把整张表拉下来。
 // 后端在 word_key 和 senses[].translation 上同时做模糊匹配，所以同一个输入框既支持
@@ -165,7 +167,10 @@ async function exportCSV() {
   }
 }
 
-onMounted(reset)
+onMounted(() => {
+  reset()
+  ensureReviewColors()
+})
 </script>
 
 <template>
@@ -222,7 +227,7 @@ onMounted(reset)
               </div>
               <span v-else>暂无释义</span>
             </td>
-            <td><span :class="countBadgeClass(d.occurrence_count)">×{{ d.occurrence_count }}</span></td>
+            <td><span :class="countBadgeClass(d.occurrence_count)" :style="reviewColorStyle(d.occurrence_count, reviewColors)">×{{ d.occurrence_count }}</span></td>
             <td>{{ formatTime(d.last_updated_at) }}</td>
             <td class="op-col">
               <button class="link-btn" v-if="!d.senses || !d.senses.length" @click="retryDictEntry(d)">

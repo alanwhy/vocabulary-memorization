@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 )
 
@@ -26,6 +28,14 @@ type ttsConfig struct {
 	VoiceType string `json:"tts_voice_type"`
 }
 
+// reviewColorConfig 是管理员配置的次数渐变。它和 DeepSeek/TTS 配置共用 settings 表，
+// 读取后缓存到 App，避免每次渲染颜色都访问数据库。
+type reviewColorConfig struct {
+	StartColor string `json:"start_color"`
+	EndColor   string `json:"end_color"`
+	Segments   int    `json:"segments"`
+}
+
 // complete 判断 TTS 配置是否齐全——三项都非空才认为已配置，缺任一项都视为「未配置」。
 func (c ttsConfig) complete() bool {
 	return c.APIKey != "" && c.Cluster != "" && c.VoiceType != ""
@@ -42,11 +52,23 @@ const (
 	settingKeyTTSCluster   = "tts_cluster"
 	settingKeyTTSVoiceType = "tts_voice_type"
 
+	settingKeyReviewColorStart    = "review_color_start"
+	settingKeyReviewColorEnd      = "review_color_end"
+	settingKeyReviewColorSegments = "review_color_segments"
+
 	// legacySettingKeyTTSAppID 旧版误把 API Key 存成了 tts_appid，启动时迁移到 tts_api_key，之后不再读写。
 	legacySettingKeyTTSAppID = "tts_appid"
 
 	// legacySettingKeyModel 旧版单一「模型」配置 key，仅用于启动时迁移到兜底模型，之后不再读写。
 	legacySettingKeyModel = "deepseek_model"
+)
+
+const (
+	defaultReviewColorStart = "#e4f7e9"
+	defaultReviewColorEnd   = "#a11d1d"
+	defaultReviewSegments   = 6
+	minReviewSegments       = 2
+	maxReviewSegments       = 12
 )
 
 // loadSettings 启动时调用：如果 settings 表里还没有 DeepSeek 配置，用环境变量（或内置默认值）种一份进去，
@@ -78,6 +100,9 @@ func (a *App) loadSettings() {
 	a.seedSettingIfMissing(ctx, settingKeyTTSAPIKey, apiKeyDefault)
 	a.seedSettingIfMissing(ctx, settingKeyTTSCluster, getEnv("TTS_CLUSTER", "volcano_tts"))
 	a.seedSettingIfMissing(ctx, settingKeyTTSVoiceType, getEnv("TTS_VOICE_TYPE", "BV001"))
+	a.seedSettingIfMissing(ctx, settingKeyReviewColorStart, defaultReviewColorStart)
+	a.seedSettingIfMissing(ctx, settingKeyReviewColorEnd, defaultReviewColorEnd)
+	a.seedSettingIfMissing(ctx, settingKeyReviewColorSegments, strconv.Itoa(defaultReviewSegments))
 	a.refreshSettingsCache(ctx)
 }
 
@@ -91,9 +116,21 @@ func (a *App) refreshSettingsCache(ctx context.Context) {
 	values, err := a.settings.LoadValues(ctx, []string{
 		settingKeyAPIKey, settingKeyBaseURL, settingKeyFallbackModel, settingKeyThinkingModel, settingKeyEnabled,
 		settingKeyTTSAPIKey, settingKeyTTSCluster, settingKeyTTSVoiceType,
+		settingKeyReviewColorStart, settingKeyReviewColorEnd, settingKeyReviewColorSegments,
 	})
 	if err != nil {
 		log.Fatalf("加载配置失败: %v", err)
+	}
+
+	segments, err := strconv.Atoi(values[settingKeyReviewColorSegments])
+	if err != nil {
+		segments = 0
+	}
+	reviewColors, err := validatedReviewColorConfig(values[settingKeyReviewColorStart], values[settingKeyReviewColorEnd], segments)
+	if err != nil {
+		// 手工改库或旧部署的脏配置不能阻断服务启动；界面先安全回退到默认值，
+		// 管理员下次保存会把三项配置一并修正。
+		reviewColors = defaultReviewColorConfig()
 	}
 
 	a.settingsMu.Lock()
@@ -109,6 +146,7 @@ func (a *App) refreshSettingsCache(ctx context.Context) {
 		Cluster:   values[settingKeyTTSCluster],
 		VoiceType: values[settingKeyTTSVoiceType],
 	}
+	a.reviewColors = reviewColors
 	a.settingsMu.Unlock()
 }
 
@@ -122,6 +160,46 @@ func (a *App) getTTSConfig() ttsConfig {
 	a.settingsMu.RLock()
 	defer a.settingsMu.RUnlock()
 	return a.ttsConfig
+}
+
+func (a *App) getReviewColorConfig() reviewColorConfig {
+	a.settingsMu.RLock()
+	defer a.settingsMu.RUnlock()
+	return a.reviewColors
+}
+
+func defaultReviewColorConfig() reviewColorConfig {
+	return reviewColorConfig{
+		StartColor: defaultReviewColorStart,
+		EndColor:   defaultReviewColorEnd,
+		Segments:   defaultReviewSegments,
+	}
+}
+
+// validatedReviewColorConfig 只接受完整的 #RRGGBB 和可展示的分段范围，
+// 让 API 和启动期缓存使用同一套规则，避免前端收到无法插值的颜色。
+func validatedReviewColorConfig(startColor, endColor string, segments int) (reviewColorConfig, error) {
+	startColor = strings.ToLower(strings.TrimSpace(startColor))
+	endColor = strings.ToLower(strings.TrimSpace(endColor))
+	if !isHexColor(startColor) || !isHexColor(endColor) {
+		return reviewColorConfig{}, fmt.Errorf("起始色和终止色必须是 #RRGGBB 格式")
+	}
+	if segments < minReviewSegments || segments > maxReviewSegments {
+		return reviewColorConfig{}, fmt.Errorf("分段数必须在 %d 到 %d 之间", minReviewSegments, maxReviewSegments)
+	}
+	return reviewColorConfig{StartColor: startColor, EndColor: endColor, Segments: segments}, nil
+}
+
+func isHexColor(color string) bool {
+	if len(color) != 7 || color[0] != '#' {
+		return false
+	}
+	for _, c := range color[1:] {
+		if !(c >= '0' && c <= '9') && !(c >= 'a' && c <= 'f') && !(c >= 'A' && c <= 'F') {
+			return false
+		}
+	}
+	return true
 }
 
 func maskAPIKey(key string) string {
@@ -141,6 +219,9 @@ type settingsView struct {
 	TTSAPIKey     string `json:"tts_api_key"`
 	TTSCluster    string `json:"tts_cluster"`
 	TTSVoiceType  string `json:"tts_voice_type"`
+	StartColor    string `json:"start_color"`
+	EndColor      string `json:"end_color"`
+	Segments      int    `json:"segments"`
 }
 
 // maskedSettingsView 构造带掩码的配置视图（APIKey 打码），供 GET 和 PUT 两个接口复用。
@@ -149,6 +230,7 @@ func (a *App) maskedSettingsView() settingsView {
 	ds.APIKey = maskAPIKey(ds.APIKey)
 	tts := a.getTTSConfig()
 	tts.APIKey = maskAPIKey(tts.APIKey)
+	reviewColors := a.getReviewColorConfig()
 	return settingsView{
 		Enabled:       ds.Enabled,
 		APIKey:        ds.APIKey,
@@ -158,6 +240,9 @@ func (a *App) maskedSettingsView() settingsView {
 		TTSAPIKey:     tts.APIKey,
 		TTSCluster:    tts.Cluster,
 		TTSVoiceType:  tts.VoiceType,
+		StartColor:    reviewColors.StartColor,
+		EndColor:      reviewColors.EndColor,
+		Segments:      reviewColors.Segments,
 	}
 }
 
@@ -174,6 +259,9 @@ type updateSettingsRequest struct {
 	TTSAPIKey     string `json:"tts_api_key"`
 	TTSCluster    string `json:"tts_cluster"`
 	TTSVoiceType  string `json:"tts_voice_type"`
+	StartColor    string `json:"start_color"`
+	EndColor      string `json:"end_color"`
+	Segments      int    `json:"segments"`
 }
 
 func (a *App) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
@@ -188,6 +276,11 @@ func (a *App) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	req.TTSAPIKey = strings.TrimSpace(req.TTSAPIKey)
 	req.TTSCluster = strings.TrimSpace(req.TTSCluster)
 	req.TTSVoiceType = strings.TrimSpace(req.TTSVoiceType)
+	reviewColors, err := validatedReviewColorConfig(req.StartColor, req.EndColor, req.Segments)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	if req.BaseURL == "" || req.FallbackModel == "" {
 		writeError(w, http.StatusBadRequest, "base_url 和兜底模型不能为空")
 		return
@@ -212,14 +305,17 @@ func (a *App) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	updates := map[string]string{
-		settingKeyAPIKey:        apiKey,
-		settingKeyBaseURL:       req.BaseURL,
-		settingKeyFallbackModel: req.FallbackModel,
-		settingKeyThinkingModel: req.ThinkingModel,
-		settingKeyEnabled:       enabledStr,
-		settingKeyTTSAPIKey:     ttsAPIKey,
-		settingKeyTTSCluster:    req.TTSCluster,
-		settingKeyTTSVoiceType:  req.TTSVoiceType,
+		settingKeyAPIKey:              apiKey,
+		settingKeyBaseURL:             req.BaseURL,
+		settingKeyFallbackModel:       req.FallbackModel,
+		settingKeyThinkingModel:       req.ThinkingModel,
+		settingKeyEnabled:             enabledStr,
+		settingKeyTTSAPIKey:           ttsAPIKey,
+		settingKeyTTSCluster:          req.TTSCluster,
+		settingKeyTTSVoiceType:        req.TTSVoiceType,
+		settingKeyReviewColorStart:    reviewColors.StartColor,
+		settingKeyReviewColorEnd:      reviewColors.EndColor,
+		settingKeyReviewColorSegments: strconv.Itoa(reviewColors.Segments),
 	}
 	if err := a.settings.UpsertMany(r.Context(), updates); err != nil {
 		log.Printf("更新配置失败: %v", err)

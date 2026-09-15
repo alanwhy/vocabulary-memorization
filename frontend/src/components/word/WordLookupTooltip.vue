@@ -1,9 +1,20 @@
 <script setup>
-import { computed, onBeforeUnmount, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, watch } from 'vue'
 import { useWordLookup } from '@/composables/useWordLookup'
 import { speakWord } from '@/composables/usePronunciation'
+import { useVocabularyIndex } from '@/composables/useVocabularyIndex'
+import { useReviewColors } from '@/composables/useReviewColors'
+import { tokenizeExample } from '@/utils/highlight'
+import { reviewColorStyle } from '@/utils/reviewLevel'
 
 const { state, close } = useWordLookup()
+const vocab = useVocabularyIndex()
+const { reviewColors, ensureReviewColors } = useReviewColors()
+
+// 弹层也是例句展示入口，复用同一分词与颜色规则，避免它和主卡片出现不同的命中颜色。
+function exampleTokens(example) {
+  return tokenizeExample(example, vocab.lookup)
+}
 
 // 音标/词级信息从第一条词性取（平铺模型下每条重复）
 const firstSense = computed(() => (state.data?.senses && state.data.senses[0]) || {})
@@ -36,6 +47,10 @@ watch(
 )
 
 onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
+onMounted(() => {
+  vocab.ensure()
+  ensureReviewColors()
+})
 </script>
 
 <template>
@@ -66,7 +81,12 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
                 <span class="tt-translation">{{ s.translation }}</span>
               </span>
               <span class="tt-example" v-if="s.example || s.example_translation">
-                <span class="tt-example-en" v-if="s.example">{{ s.example }}</span>
+                <span class="tt-example-en" v-if="s.example"><span
+                  v-for="(t, ti) in exampleTokens(s.example)"
+                  :key="ti"
+                  :class="t.count ? 'hl-word' : ''"
+                  :style="t.count ? reviewColorStyle(t.count, reviewColors) : undefined"
+                >{{ t.text }}</span></span>
                 <span class="tt-example-trans" v-if="s.example_translation">{{ s.example_translation }}</span>
               </span>
             </div>

@@ -11,6 +11,9 @@ const form = reactive({
   tts_api_key: '',
   tts_cluster: '',
   tts_voice_type: '',
+  start_color: '#e4f7e9',
+  end_color: '#a11d1d',
+  segments: 6,
 })
 const savingSettings = ref(false)
 const settingsMsgError = ref('')
@@ -65,6 +68,20 @@ onMounted(loadSettings)
     <input type="text" v-model="form.tts_cluster" placeholder="volcano_tts" />
     <label>音色 VoiceType</label>
     <input type="text" v-model="form.tts_voice_type" placeholder="BV001 或 BV002" />
+    <button class="primary" :disabled="savingSettings" @click="saveSettings">保存配置</button>
+    <p class="msg" :class="{ error: !!settingsMsgError, ok: !!settingsMsgOk }">
+      {{ settingsMsgError || settingsMsgOk }}
+    </p>
+  </div>
+
+  <h2>背诵次数渐变配置</h2>
+  <div class="card">
+    <label>起始色</label>
+    <input type="color" v-model="form.start_color" />
+    <label>终止色</label>
+    <input type="color" v-model="form.end_color" />
+    <label>分段数（2–12）</label>
+    <input type="number" v-model.number="form.segments" min="2" max="12" step="1" />
     <button class="primary" :disabled="savingSettings" @click="saveSettings">保存配置</button>
     <p class="msg" :class="{ error: !!settingsMsgError, ok: !!settingsMsgOk }">
       {{ settingsMsgError || settingsMsgOk }}

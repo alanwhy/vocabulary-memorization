@@ -3,13 +3,15 @@ import { ref, computed, onMounted } from 'vue'
 import { apiGet, apiPost, apiPut } from '@/api/client'
 import { useVocabularyIndex } from '@/composables/useVocabularyIndex'
 import { useWordLookup } from '@/composables/useWordLookup'
+import { useReviewColors } from '@/composables/useReviewColors'
 import { speakWord } from '@/composables/usePronunciation'
 import { tokenizeExample, splitWordRef } from '@/utils/highlight'
-import { countBadgeClass } from '@/utils/reviewLevel'
+import { countBadgeClass, reviewColorStyle } from '@/utils/reviewLevel'
 import { splitGlosses } from '@/utils/gloss'
 
 const vocab = useVocabularyIndex()
 const lookup = useWordLookup()
+const { reviewColors, ensureReviewColors } = useReviewColors()
 const cards = ref([])
 const index = ref(0)
 const flipped = ref(false)
@@ -19,8 +21,6 @@ const error = ref('')
 const doneCount = ref(0)
 
 const current = computed(() => cards.value[index.value] ?? null)
-// 当前单词的小写 key，例句里只有它会被高亮（其余词不再按词库着色）
-const currentKey = computed(() => current.value?.word_key || '')
 // 词级强化信息（音标/词根词缀/近反义）从第一条词性取（平铺模型下每条重复）
 const firstSense = computed(() => (current.value?.senses && current.value.senses[0]) || {})
 const phonetic = computed(() => firstSense.value.phonetic || '')
@@ -64,12 +64,8 @@ async function toggleGloss(gloss) {
   }
 }
 
-function hlClass(level) {
-  return `hl-word hl-word--l${level}`
-}
-
 function exampleTokens(s) {
-  return tokenizeExample(s.example || '', vocab.lookup, currentKey.value)
+  return tokenizeExample(s.example || '', vocab.lookup)
 }
 
 // 点击例句里的某个 token：单词打开查词 tooltip 并拦截冒泡，非单词放行（可翻面）
@@ -90,9 +86,10 @@ const finished = computed(() => !loading.value && index.value >= cards.value.len
 const allDone = computed(() => finished.value && cards.value.length === 0)
 const progress = computed(() => `${Math.min(index.value + 1, cards.value.length)} / ${cards.value.length}`)
 
-// 两个评分档位，与后端 good / again 对应；「记住」会直接归档
+// “模糊”表示看例句后认出，会比“不认识”更晚复习；“记住”仍会直接归档。
 const RATINGS = [
   { key: 'again', label: '不认识', emoji: '❌', type: 'danger' },
+  { key: 'fuzzy', label: '模糊', emoji: '🤔', type: 'warning' },
   { key: 'good', label: '记住', emoji: '✅', type: 'success' },
 ]
 
@@ -142,6 +139,7 @@ async function rate(rating) {
 onMounted(() => {
   loadQueue()
   vocab.ensure()
+  ensureReviewColors()
 })
 </script>
 
@@ -169,7 +167,7 @@ onMounted(() => {
       <div class="flip" :class="{ flipped }" @click="flip">
         <div class="flip-inner">
           <div class="face front">
-            <span class="front-count" :class="countBadgeClass(current.review_count)">×{{ current.review_count }}</span>
+            <span class="front-count" :class="countBadgeClass(current.review_count)" :style="reviewColorStyle(current.review_count, reviewColors)">×{{ current.review_count }}</span>
             <span class="word">{{ current.display_word }}</span>
             <span class="phonetic-row">
               <span class="phonetic" v-if="phonetic">{{ phonetic }}</span>
@@ -186,7 +184,8 @@ onMounted(() => {
               <span
                 v-for="(t, i) in exampleTokens(frontExample)"
                 :key="i"
-                :class="[t.isWord ? 'lookup-word' : '', t.level ? hlClass(t.level) : '']"
+                :class="[t.isWord ? 'lookup-word' : '', t.count ? 'hl-word' : '']"
+                :style="t.count ? reviewColorStyle(t.count, reviewColors) : undefined"
                 @click="onTokenClick($event, t)"
               >{{ t.text }}</span>
             </span>
@@ -221,7 +220,8 @@ onMounted(() => {
                     <span
                       v-for="(t, i) in exampleTokens(s)"
                       :key="i"
-                      :class="[t.isWord ? 'lookup-word' : '', t.level ? hlClass(t.level) : '']"
+                      :class="[t.isWord ? 'lookup-word' : '', t.count ? 'hl-word' : '']"
+                      :style="t.count ? reviewColorStyle(t.count, reviewColors) : undefined"
                       @click="onTokenClick($event, t)"
                     >{{ t.text }}</span>
                   </span>
@@ -239,7 +239,7 @@ onMounted(() => {
                 <span class="enrich-label">词根词缀：</span>{{ rootAffix }}
               </span>
               <span v-for="g in enrichGroups" :key="g.label">
-                <span class="enrich-label">{{ g.label }}：</span><span v-for="(r, i) in g.refs" :key="i">{{ i > 0 ? '、' : '' }}<span class="lookup-word" @click="openLookup($event, r.word)">{{ r.word }}</span>{{ r.rest }}</span>
+                <span class="enrich-label">{{ g.label }}：</span><span v-for="(r, i) in g.refs" :key="i">{{ i > 0 ? '、' : '' }}<span class="lookup-word" :class="{ 'known-word': vocab.lookup(r.word.toLowerCase()) }" @click="openLookup($event, r.word)">{{ r.word }}</span>{{ r.rest }}</span>
               </span>
             </div>
             <span class="count">已背 ×{{ current.review_count }}</span>
