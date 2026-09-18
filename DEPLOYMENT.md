@@ -32,7 +32,7 @@ ssh root@101.42.45.60 "cd /root/vocabulary-memorization && docker compose up -d 
 
 ## 涉及数据库结构变更时：先备份，再部署，再验证迁移结果
 
-后端启动时的 `migrateSchema()`（`backend/db.go`）会自动、幂等地跑完所有建表 / 加列 / 历史数据回填，**不需要手工连数据库执行 SQL**。但只要这次更新涉及表结构变更（加表、加列、扫表回填一类），部署前建议按下面的顺序操作，而不是直接第 3 步覆盖重建：
+后端启动时的 `storage.Migrate()`（`backend/internal/storage/migrations.go`）会自动、幂等地跑完所有建表 / 加列 / 历史数据回填，**不需要手工连数据库执行 SQL**。但只要这次更新涉及表结构变更（加表、加列、扫表回填一类），部署前建议按下面的顺序操作，而不是直接第 3 步覆盖重建：
 
 ```bash
 # 1. 部署前先在服务器上给数据库整体备份一份（在 mysql 容器内执行，密码不会出现在本机终端里）
@@ -84,7 +84,7 @@ ENV NPM_CONFIG_REGISTRY=https://registry.npmmirror.com
 
 ## 安全：不要把密钥写进代码
 
-之前 `deploy.sh` 和 `backend/settings.go` 里各硬编码过一份真实的 DeepSeek API Key 作为默认值，被 GitHub push protection 拦截，后来把这两处默认值改成了空字符串，并清理了本地未推送提交的 git 历史。以后 DeepSeek Key 只应该存在于服务器上的 `.env`（不进 git，已在 `.gitignore` 里）或数据库（后台管理页面改）。
+之前 `deploy.sh` 和 `backend/internal/app/settings.go` 里各硬编码过一份真实的 DeepSeek API Key 作为默认值，被 GitHub push protection 拦截，后来把这两处默认值改成了空字符串，并清理了本地未推送提交的 git 历史。以后 DeepSeek Key 只应该存在于服务器上的 `.env`（不进 git，已在 `.gitignore` 里）或数据库（后台管理页面改）。
 
 ## 常用命令
 

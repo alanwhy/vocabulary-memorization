@@ -12,7 +12,7 @@ ENV GOPROXY=https://goproxy.cn,direct
 COPY backend/go.mod ./
 COPY backend/ .
 RUN go mod tidy
-RUN CGO_ENABLED=0 GOOS=linux go build -o server .
+RUN CGO_ENABLED=0 GOOS=linux go build -o server ./cmd/vocab-server
 
 FROM alpine:3.19
 RUN apk add --no-cache ca-certificates tzdata

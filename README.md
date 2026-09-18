@@ -88,7 +88,7 @@ docker compose up -d --build
 # 后端
 cd backend
 DB_HOST=127.0.0.1 DB_PORT=3306 DB_USER=vocab DB_PASSWORD=devpass DB_NAME=vocab \
-  ADMIN_USERNAME=admin ADMIN_PASSWORD=admin123456 go run .
+  ADMIN_USERNAME=admin ADMIN_PASSWORD=admin123456 go run ./cmd/vocab-server
 
 # 前端（另开终端）
 cd frontend
@@ -111,18 +111,10 @@ docker compose down -v           # 停止并清空数据库数据（慎用）
 ```
 vocabulary-memorization/
 ├── backend/                   Go 后端源码
-│   ├── main.go                  路由注册 + 单词录入/列表/归档/删除/闪卡/统计接口
-│   ├── store.go                 所有 SQL 收在这里（repository 层）：分页、排序白名单、统计聚合
-│   ├── app.go                   App 结构体 + 各 repository 的窄接口（便于测试替换成 fake）
-│   ├── db.go                    MySQL 连接 + 幂等数据库迁移（含历史数据回填、词性合并修复）
-│   ├── auth.go                  登录/登出、Bearer Token 中间件、超管引导、用户管理与密码重置
-│   ├── dictionary.go            全局词库缓存的读写、出现次数统计、管理员查看与删除
-│   ├── settings.go              DeepSeek 查词 + 豆包语音配置的读写与内存缓存
-│   ├── deepseek.go              调用 DeepSeek 查词
-│   ├── doubao.go / pronunciation.go   豆包语音合成与发音接口
-│   ├── translate.go            查词编排：重试调度、拼写校验、释义写回
-│   ├── middleware.go / ratelimit.go    panic 恢复中间件、登录/改密失败限流
-│   ├── models.go               数据结构、同词性释义合并、SRS 排期算法
+│   ├── cmd/vocab-server/         进程入口：依赖组装、服务启动与优雅关闭
+│   ├── internal/app/             路由、Handler、中间件、业务编排和外部能力适配
+│   ├── internal/storage/         MySQL 连接、迁移和各业务 Repository
+│   ├── internal/model/           共享领域模型与纯业务规则
 │   ├── schema.sql                 数据库表结构
 │   ├── static/                    前端构建产物（`frontend/` 构建后生成，不进 git）
 │   └── Dockerfile                 多阶段构建：先构建 frontend/ 产物，再编译 Go 二进制

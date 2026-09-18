@@ -2,6 +2,12 @@
 
 本项目的版本变更记录，格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [1.18.2] - 2026-09-18
+
+### Changed
+- Go 后端由单一平铺包重构为 `cmd/vocab-server`、`internal/app`、`internal/storage` 与 `internal/model` 四层目录，建立单向依赖和显式 repository 注入
+- Docker 构建入口及开发、部署文档同步适配新目录；HTTP API、数据库结构、SQL 与业务行为保持不变
+
 ## [1.18.1] - 2026-09-15
 
 ### Fixed

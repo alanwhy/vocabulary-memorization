@@ -57,7 +57,7 @@ docker run -d --name vocab-mysql-dev -p 3306:3306 \
 
 `docker-entrypoint-initdb.d` 只在**数据目录为空时**执行，也就是只有这个容器第一次启动会导入 `schema.sql`。
 
-> ⚠️ **一定要导入 `schema.sql`**：`words` 表只在 `schema.sql` 里定义，Go 的 `migrateSchema()` 不会建它（它只负责补 `users`/`sessions`/`settings`/`word_dictionary` 和后续的加列、加索引、历史数据回填）。对着一个完全空的库直接跑后端，会在第一次操作单词时报表不存在。
+> ⚠️ **一定要导入 `schema.sql`**：`words` 表只在 `schema.sql` 里定义，Go 的 `storage.Migrate(db)` 不会建它（它只负责补 `users`/`sessions`/`settings`/`word_dictionary` 和后续的加列、加索引、历史数据回填）。对着一个完全空的库直接跑后端，会在第一次操作单词时报表不存在。
 
 如果你更愿意用系统里已装的 MySQL：`mysql -uroot -p < backend/schema.sql` 手工导入一次即可，然后把下一步的连接参数改成你自己的。
 
@@ -67,10 +67,10 @@ docker run -d --name vocab-mysql-dev -p 3306:3306 \
 cd backend
 DB_HOST=127.0.0.1 DB_PORT=3306 DB_USER=vocab DB_PASSWORD=devpass DB_NAME=vocab \
 ADMIN_USERNAME=admin ADMIN_PASSWORD=admin123456 \
-go run .
+go run ./cmd/vocab-server
 ```
 
-后端固定监听 `:8080`（写死在 `main.go`，没有 `PORT` 环境变量）。首次启动会：连库 → 跑幂等迁移 → 没有超管账号时用 `ADMIN_USERNAME`/`ADMIN_PASSWORD` 建一个（不设 `ADMIN_PASSWORD` 就随机生成一个并打在日志里）。
+后端固定监听 `:8080`（写死在 `cmd/vocab-server/main.go`，没有 `PORT` 环境变量）。首次启动会：连库 → 跑幂等迁移 → 没有超管账号时用 `ADMIN_USERNAME`/`ADMIN_PASSWORD` 建一个（不设 `ADMIN_PASSWORD` 就随机生成一个并打在日志里）。
 
 **3. 起前端**
 
@@ -103,7 +103,7 @@ npm run dev
 # 后端
 cd backend
 go vet ./...            # 静态检查
-go test ./...           # 全部单元测试（46 个，不连数据库，秒级）
+go test ./...           # 全部 Go 单元测试（不连数据库，秒级）
 go test -run TestParsePagination ./...
 
 # 前端
@@ -133,47 +133,49 @@ npm run preview         # 本地预览构建产物
 ### 后端分层：handler → 窄接口 → repository
 
 ```
-main.go / auth.go / dictionary.go / settings.go   handler（解析请求、鉴权、写响应）
-app.go                                            App 结构体 + userStore/wordStore/... 窄接口
-store.go                                          所有 SQL 都在这里，一个 repo 一个 struct
+cmd/vocab-server/main.go        组合根（依赖组装、启动、优雅关闭）
+internal/app/                   路由、handler、middleware、业务编排和 Store 窄接口
+internal/storage/               MySQL 连接、迁移及 repository 实现
+internal/model/                 共享领域模型与纯业务规则
 ```
 
-- **SQL 只写在 `store.go`**，handler 里不出现 `db.Query`。
-- handler 是 `*App` 的方法，依赖通过 `app.go` 里的窄接口拿，这样测试能塞 fake 进去。
+- **SQL 只写在 `internal/storage/`**，handler 里不出现 `db.Query`。
+- handler 是 `*App` 的方法，依赖通过 `internal/app/app.go` 里的窄接口注入，这样测试能使用 fake 替换真实 repository。
+- 依赖方向固定为 `cmd → app/storage → model`；`app` 不导入 `storage`，`storage` 不导入 `app`。
 - 新增一个接口的完整步骤：
-  1. `store.go` 给对应的 repo 加方法
-  2. `app.go` 在窄接口里加同名方法签名
-  3. 写 handler 方法
-  4. `main.go` 的 `mux` 注册路由，统一套 `withTimeout(defaultRequestTimeout)(app.requireAuth(...))`（管理员接口用 `requireAdmin`）
-  5. `fakes_test.go` 里对应的 fake 补上这个方法（不补的话整个测试包编译不过）
+  1. `internal/storage/` 给对应的 repository 加方法
+  2. `internal/app/app.go` 在窄接口里加同名方法签名
+  3. 在 `internal/app/` 对应业务文件中写 handler
+  4. 在 `internal/app/routes.go` 注册路由，统一套 `withTimeout(defaultRequestTimeout)(app.requireAuth(...))`（管理员接口用 `requireAdmin`）
+  5. `internal/app/fakes_test.go` 里对应的 fake 补上这个方法（不补的话整个测试包编译不过）
   6. 加测试
 
 ### 数据库迁移必须幂等
 
-表结构变更写在两个地方：`schema.sql`（新装机器用）+ `db.go` 的迁移函数（老部署用），**不要让任何人手工连数据库执行 SQL**。迁移函数必须用 `columnExists` / `indexExists` 守卫，保证反复启动都是空操作：
+表结构变更写在两个地方：`schema.sql`（新装机器用）+ `internal/storage/migrations.go` 的迁移函数（老部署用），**不要让任何人手工连数据库执行 SQL**。迁移函数必须用 `columnExists` / `indexExists` 守卫，保证反复启动都是空操作：
 
 ```go
-func migrateUsersLastLoginColumn() {
-	if columnExists("users", "last_login_at") {
+func migrateUsersLastLoginColumn(db *sql.DB) {
+	if columnExists(db, "users", "last_login_at") {
 		return
 	}
-	mustExec(`ALTER TABLE users ADD COLUMN last_login_at DATETIME NULL`)
+	mustExec(db, `ALTER TABLE users ADD COLUMN last_login_at DATETIME NULL`)
 }
 ```
 
-写完记得在 `migrateSchema()` 里按顺序调用。
+写完记得在 `storage.Migrate(db)` 里按顺序调用。
 
 ### 分页三条铁律
 
-1. **响应用统一信封**：`newPageResult(items, total, page, limit)` → `{items, total, page, limit, has_more}`，`has_more` 由后端算，前端不要自己拿 `total` 和 `page` 推。
-2. **`ORDER BY` 走白名单**：排序片段是字符串拼接进 SQL 的，请求参数只能用来在 `switch` 里选分支（见 `wordOrderBy`），绝不能拼进语句。
-3. **每种排序都要有唯一 tiebreaker**：结尾必须带 `id`。按不唯一的列做 `LIMIT/OFFSET` 翻页，会出现同一条记录在两页都出现、另一条谁都不出现。`store_test.go` 里有个测试专门守这条不变量。
+1. **响应用统一信封**：`internal/app/response.go` 的 `newPageResult(items, total, page, limit)` → `{items, total, page, limit, has_more}`，`has_more` 由后端算，前端不要自己拿 `total` 和 `page` 推。
+2. **`ORDER BY` 走白名单**：排序片段是字符串拼接进 SQL 的，请求参数只能用来在 `internal/storage/words.go` 的 `wordOrderBy` 中选择固定分支，绝不能拼进语句。
+3. **每种排序都要有唯一 tiebreaker**：结尾必须带 `id`。按不唯一的列做 `LIMIT/OFFSET` 翻页，会出现同一条记录在两页都出现、另一条谁都不出现。`internal/storage/store_test.go` 里有个测试专门守这条不变量。
 
-另外，`LIKE` 的关键字一律走 `likeContains()`（内部用 `escapeLikePattern()` 转义 `\ % _` 再包 `%…%`），不要自己拼 `"%"+keyword+"%"`，否则用户输入的 `%` 会变成通配符。
+另外，`LIKE` 的关键字一律走 `internal/storage` 的 `likeContains()`（内部用 `escapeLikePattern()` 转义 `\ % _` 再包 `%…%`），不要自己拼 `"%"+keyword+"%"`，否则用户输入的 `%` 会变成通配符。
 
 ### 测试：fake 优先，纯函数优先
 
-- 单元测试**不连数据库**。仓储层通过 `fakes_test.go` 里手写的 fake 替换（不用 mock 框架），handler 测试用 `httptest` 打 `App` 的方法。
+- 单元测试**不连数据库**。应用层通过 `internal/app/fakes_test.go` 里手写的 repository fake 替换真实存储实现（不用 mock 框架），Handler 测试用 `httptest` 调用 `App` 的方法。
 - 排序映射、分页参数夹取、LIKE 转义、id 列表解析这类逻辑都刻意抽成了纯函数，方便直接测边界值——新写逻辑时优先照这个思路拆。
 - 涉及安全的地方（SQL 拼接、鉴权、限流）必须有测试，包括恶意输入的用例，比如 `wordOrderBy("1; DROP TABLE words")` 要落到默认分支。
 
