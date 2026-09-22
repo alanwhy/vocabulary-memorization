@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { apiGet, apiPost, apiPut } from '@/api/client'
 import { useVocabularyIndex } from '@/composables/useVocabularyIndex'
 import { useWordLookup } from '@/composables/useWordLookup'
@@ -136,6 +136,11 @@ async function rate(rating) {
   }
 }
 
+// 每次展示新卡片（加载/切换到下一张）时自动朗读一次，翻面不重复触发
+watch(current, (wd) => {
+  if (wd) speakWord(wd.word_key)
+})
+
 onMounted(() => {
   loadQueue()
   vocab.ensure()
@@ -192,6 +197,7 @@ onMounted(() => {
             <span class="hint">点击翻面看释义</span>
           </div>
           <div class="face back">
+            <span class="word">{{ current.display_word }}</span>
             <span class="phonetic-row">
               <span class="phonetic" v-if="phonetic">{{ phonetic }}</span>
               <button
