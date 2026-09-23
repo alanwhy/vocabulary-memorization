@@ -1,9 +1,10 @@
 <script setup>
-import { ref, computed, onMounted, watch } from 'vue'
-import { apiGet, apiPost, apiPut } from '@/api/client'
+import { computed, onMounted, watch } from 'vue'
+import { apiPut } from '@/api/client'
 import { useVocabularyIndex } from '@/composables/useVocabularyIndex'
 import { useWordLookup } from '@/composables/useWordLookup'
 import { useReviewColors } from '@/composables/useReviewColors'
+import { useFlashcardQueue } from '@/composables/useFlashcardQueue'
 import { speakWord } from '@/composables/usePronunciation'
 import { tokenizeExample, splitWordRef } from '@/utils/highlight'
 import { countBadgeClass, reviewColorStyle } from '@/utils/reviewLevel'
@@ -12,15 +13,22 @@ import { splitGlosses } from '@/utils/gloss'
 const vocab = useVocabularyIndex()
 const lookup = useWordLookup()
 const { reviewColors, ensureReviewColors } = useReviewColors()
-const cards = ref([])
-const index = ref(0)
-const flipped = ref(false)
-const submitting = ref(false)
-const loading = ref(true)
-const error = ref('')
-const doneCount = ref(0)
-
-const current = computed(() => cards.value[index.value] ?? null)
+const {
+  cards,
+  index,
+  flipped,
+  submitting,
+  loading,
+  error,
+  doneCount,
+  current,
+  finished,
+  allDone,
+  loadQueue,
+  ensureQueue,
+  flip,
+  rate,
+} = useFlashcardQueue()
 // 词级强化信息（音标/词根词缀/近反义）从第一条词性取（平铺模型下每条重复）
 const firstSense = computed(() => (current.value?.senses && current.value.senses[0]) || {})
 const phonetic = computed(() => firstSense.value.phonetic || '')
@@ -80,10 +88,6 @@ function openLookup(e, word) {
   e.stopPropagation()
   lookup.open(e, word)
 }
-// 当前组是否已背完（含空组）
-const finished = computed(() => !loading.value && index.value >= cards.value.length)
-// 真正没有待复习单词（组为空）
-const allDone = computed(() => finished.value && cards.value.length === 0)
 const progress = computed(() => `${Math.min(index.value + 1, cards.value.length)} / ${cards.value.length}`)
 
 // “模糊”表示看例句后认出，会比“不认识”更晚复习；“记住”仍会直接归档。
@@ -93,56 +97,13 @@ const RATINGS = [
   { key: 'good', label: '记住', emoji: '✅', type: 'success' },
 ]
 
-async function loadQueue() {
-  loading.value = true
-  error.value = ''
-  try {
-    cards.value = await apiGet('/api/flashcards/queue')
-    index.value = 0
-    flipped.value = false
-  } catch (e) {
-    error.value = e.message || '加载失败'
-  } finally {
-    loading.value = false
-  }
-}
-
-function flip() {
-  if (submitting.value) return
-  flipped.value = !flipped.value
-}
-
-// 翻转过渡时长（ms），需与 .flip-inner 的 transition 时长保持一致
-const FLIP_MS = 500
-
-async function rate(rating) {
-  if (!current.value || submitting.value) return
-  submitting.value = true
-  error.value = ''
-  try {
-    await apiPost('/api/flashcards/review', { id: current.value.id, rating })
-    doneCount.value += 1
-    if (flipped.value) {
-      // 先翻回正面（仍是当前单词），等翻转动画结束再切下一张，
-      // 避免翻转回正面的动画期间露出下一张卡片的背面中文释义
-      flipped.value = false
-      await new Promise((resolve) => setTimeout(resolve, FLIP_MS))
-    }
-    index.value += 1
-  } catch (e) {
-    error.value = e.message || '提交失败'
-  } finally {
-    submitting.value = false
-  }
-}
-
 // 每次展示新卡片（加载/切换到下一张）时自动朗读一次，翻面不重复触发
 watch(current, (wd) => {
   if (wd) speakWord(wd.word_key)
 })
 
 onMounted(() => {
-  loadQueue()
+  ensureQueue()
   vocab.ensure()
   ensureReviewColors()
 })

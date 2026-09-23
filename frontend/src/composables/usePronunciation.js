@@ -24,7 +24,11 @@ export async function speakWord(wordKey) {
     const url = URL.createObjectURL(blob)
     const audio = new Audio(url)
     activeAudio = audio
-    audio.play().catch(() => ElMessage.error('播放失败'))
+    audio.play().catch((err) => {
+      // 浏览器自动播放策略拦截非用户手势触发的播放（如展示新卡片时自动朗读），
+      // 这不是发音失败，不提示报错；手动点击喇叭触发的播放失败才提示。
+      if (err?.name !== 'NotAllowedError') ElMessage.error('播放失败')
+    })
   } catch {
     ElMessage.error('发音失败，请稍后重试')
   }
