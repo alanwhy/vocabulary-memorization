@@ -1,0 +1,11 @@
+# 当前生产服务器的迁移数据卷已存在；显式复用，卷缺失时失败而不新建空卷。
+# 与 docker-compose.yml 一起通过 -f 加载，保留基础文件中的源码构建配置。
+name: vocabulary-memorization
+
+volumes:
+  mysql_data:
+    external: true
+    name: vocabulary-memorization_mysql_data
+  audio_data:
+    external: true
+    name: vocabulary-memorization_audio_data

@@ -77,8 +77,9 @@ docker compose up -d --build
 ```
 
 - 访问 `http://localhost:39100`，用 `.env` 里的 `ADMIN_USERNAME` / `ADMIN_PASSWORD` 登录。
-- `.env` 已加入 `.gitignore`（含数据库密码、超管密码、DeepSeek Key），换机器部署记得一起拷贝。
+- `.env` 已加入 `.gitignore`（含数据库密码、超管密码、DeepSeek Key）；迁移到新机器时还需迁移 MySQL 和音频数据卷，不能只拷贝代码。
 - 前端产物构建进镜像，改前端代码需 `--build` 重建才能看到效果。
+- 当前生产服务器为 `123.56.219.4`，SSH 端口为 `7339`，访问地址为 `http://123.56.219.4:39100`。生产更新使用基础 Compose 与生产覆盖文件，完整流程见 [DEPLOYMENT.md](DEPLOYMENT.md)。
 
 ### 方式二：本地开发（前端热更新）
 

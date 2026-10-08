@@ -196,7 +196,7 @@ func migrateUsersLastLoginColumn(db *sql.DB) {
    - `CHANGELOG.md` 加一个版本条目（`Added` / `Fixed` / `Changed` / `Security` 分段，中文）
    - `frontend/src/views/HomeView.vue` 底部的 footer 版本号
    - `frontend/package.json` 的 `version`；改完跑一次 `npm install --package-lock-only` 同步 lockfile（Docker 构建用 `npm ci`，两者版本不一致会构建失败）
-4. 部署：`git push origin main` 之后按 [DEPLOYMENT.md](DEPLOYMENT.md) 走（rsync 到服务器 + `docker compose up -d --build`，服务器网络连 GitHub 不稳定，不要在服务器上 `git pull`）。**这次改动涉及表结构变更时，先在服务器上 `mysqldump` 备份，再部署，再验证新列/新索引是否补上。**
+4. 部署：`git push origin main` 之后按 [DEPLOYMENT.md](DEPLOYMENT.md) 走：通过 SSH 7339 端口 rsync 到 `root@123.56.219.4:/root/vocabulary-memorization/`，再执行 `docker compose -f docker-compose.yml -f docker-compose.production.yml up -d --build`，复用迁移后的生产数据卷。**这次改动涉及表结构变更时，先在服务器上 `mysqldump` 备份，再部署，再验证新列/新索引是否补上。**
 
 ## 常见坑
 

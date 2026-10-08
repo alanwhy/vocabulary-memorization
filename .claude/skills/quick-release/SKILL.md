@@ -21,24 +21,24 @@ description: 当用户以“快速上线”“快速发布”“一键上线”�
 2. 确定语义化版本号：用户指定版本时严格使用该版本；未指定时，纯缺陷修复升补丁号，新增向后兼容功能升次版本号，破坏性变更仅在用户明确要求时升主版本号。当前版本源为 `frontend/package.json`，使用 `npm version <版本号> --no-git-tag-version` 同步更新 `frontend/package-lock.json`，不得生成 Git tag。
 3. 在 `CHANGELOG.md` 顶部写入对应版本和当天日期，仅根据当前待发布改动记录 `Added`、`Changed`、`Fixed`。仅在功能、配置、部署方式或使用说明确有变化时同步更新相关 README、部署文档和已有的 `docs/ai` 产物；不要为了凑发布而改无关文档。
 4. 复核将暂存的文件和 diff，使用 `release: v<版本号>` 提交并推送 `origin main`。推送成功前不得部署。
-5. 按 `DEPLOYMENT.md` 更新生产环境：
-   - 若本次涉及数据库结构或数据迁移，先在服务器执行以版本号命名的 MySQL 全库备份；无法判断时按涉及迁移处理。
-   - 用 `rsync -avz` 同步本仓库到 `root@101.42.45.60:/root/vocabulary-memorization/`，并排除 `.git`、`.env`、`.codegraph` 和 `node_modules`，保留服务器密钥与数据。
-   - 通过 SSH 在服务器目录执行 `docker compose up -d --build`。这是更新部署，不要运行仅适用于首次部署、可能生成 `.env` 的 `deploy.sh`。
+5. 按 `DEPLOYMENT.md` 更新生产环境（服务器 `123.56.219.4`，用户 `root`，SSH 端口 `7339`）：
+   - 若本次涉及数据库结构或数据迁移，先在服务器执行以版本号命名的 MySQL 全库备份；无法判断时按涉及迁移处理。备份存服务器 `backups/` 目录，确认命令成功且文件非空后继续；失败时停止，不覆盖同名已有备份。
+   - 用 `rsync -avz -e 'ssh -p 7339'` 同步本仓库到 `root@123.56.219.4:/root/vocabulary-memorization/`，并排除 `.git`、`.env`、`.codegraph`、`node_modules`、`backups` 和 `compose.migrated.json`，不加 `--delete`，保留服务器密钥、数据、备份与迁移记录。
+   - 通过 `ssh -p 7339` 在服务器目录执行 `docker compose -f docker-compose.yml -f docker-compose.production.yml up -d --build`。同步仓库基础配置后恢复源码构建，生产覆盖文件固定项目名并复用现有 MySQL/音频卷；卷不存在时停止，不创建空卷替代。不要沿用只有镜像、没有 `build` 的迁移配置，也不要运行仅适用于首次部署、可能生成 `.env` 的 `deploy.sh`。
 6. 报告版本号、提交 SHA、推送结果和部署命令结果；明确说明本技能未执行本机构建、测试、线上冒烟或功能验收。
 
 ## 数据库变更备份
 
-部署前的备份使用服务器现有环境变量，密码不得打印到本机终端：
+部署前的备份使用服务器现有环境变量，密码不得打印到本机终端。备份命令使用现有默认配置并显式固定项目名，首次源码更新前也能执行，不依赖尚未同步的生产覆盖文件：
 
 ```bash
-ssh root@101.42.45.60 "cd /root/vocabulary-memorization && docker compose exec -T mysql sh -c 'mysqldump -uroot -p\"\$MYSQL_ROOT_PASSWORD\" --all-databases > /tmp/backup_pre_<版本号>.sql'"
+ssh -p 7339 root@123.56.219.4 "cd /root/vocabulary-memorization && umask 077 && mkdir -p backups && set -C && docker compose -p vocabulary-memorization exec -T mysql sh -c 'MYSQL_PWD=\"\$MYSQL_ROOT_PASSWORD\" mysqldump -uroot --all-databases' > backups/backup_pre_<版本号>.sql && test -s backups/backup_pre_<版本号>.sql"
 ```
 
 部署同步和重建命令如下；执行时将本地路径替换为当前仓库的绝对路径：
 
 ```bash
-rsync -avz --exclude='.git' --exclude='.env' --exclude='.codegraph' --exclude='node_modules' \
-  <本地仓库绝对路径>/ root@101.42.45.60:/root/vocabulary-memorization/
-ssh root@101.42.45.60 "cd /root/vocabulary-memorization && docker compose up -d --build"
+rsync -avz -e 'ssh -p 7339' --exclude='.git' --exclude='.env' --exclude='.codegraph' --exclude='node_modules' --exclude='backups' --exclude='compose.migrated.json' \
+  <本地仓库绝对路径>/ root@123.56.219.4:/root/vocabulary-memorization/
+ssh -p 7339 root@123.56.219.4 "cd /root/vocabulary-memorization && docker compose -f docker-compose.yml -f docker-compose.production.yml up -d --build"
 ```

@@ -1,4 +1,7 @@
 .git
+.env
+backups/
+compose.migrated.json
 .codegraph
 frontend/node_modules
 frontend/dist

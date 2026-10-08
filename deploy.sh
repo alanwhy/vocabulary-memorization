@@ -27,7 +27,7 @@ docker compose up -d --build
 
 echo ""
 echo "部署完成。"
-echo "浏览器访问: http://101.42.45.60:39100"
+echo "浏览器访问: http://123.56.219.4:39100"
 echo "超管账号：用户名/密码见 .env 里的 ADMIN_USERNAME / ADMIN_PASSWORD（首次部署已自动生成）"
 echo ""
 echo "如果访问不了，大概率是端口没放行，检查："

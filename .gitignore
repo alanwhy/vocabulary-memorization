@@ -1,4 +1,6 @@
 .env
+backups/
+compose.migrated.json
 backend/vocab-backend
 backend/static
 backend/audio/
