@@ -73,7 +73,9 @@ async function toggleGloss(gloss) {
 }
 
 function exampleTokens(s) {
-  return tokenizeExample(s.example || '', vocab.lookup)
+  // 闪卡仅突出正在复习的词，避免例句中的其它已收录词提前泄露提示；它们仍可点击查词。
+  const currentKey = current.value?.word_key
+  return tokenizeExample(s.example || '', (key) => (key === currentKey ? vocab.lookup(key) : 0))
 }
 
 // 点击例句里的某个 token：单词打开查词 tooltip 并拦截冒泡，非单词放行（可翻面）

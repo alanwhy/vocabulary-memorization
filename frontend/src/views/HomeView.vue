@@ -246,6 +246,8 @@ onMounted(() => {
         @set-important="handleSetImportant"
         @load-more="loadMore"
       />
+
+      <el-backtop :right="24" :bottom="32" :visibility-height="300" title="回到顶部" />
     </div>
   </div>
 </template>
