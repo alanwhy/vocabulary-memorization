@@ -68,7 +68,7 @@ function toggleGloss(gloss) {
 }
 
 function exampleTokens(s) {
-  return tokenizeExample(s.example || '', vocab.lookup)
+  return tokenizeExample(s.example || '', vocab.lookup, props.word.word_key)
 }
 
 // 点击例句里的某个 token：单词打开查词 tooltip，非单词忽略
@@ -120,13 +120,13 @@ function openLookup(e, word) {
         <div class="sense" v-for="(s, idx) in validSenses" :key="idx">
           <span class="pos" v-if="s.pos">{{ s.pos }}</span>
           <span class="translation">
-            <span
-              v-for="(g, gi) in glossItems(s)"
-              :key="gi"
-              class="gloss"
-              :class="{ 'gloss-important': importantSet.has(g) }"
-              @click.stop="toggleGloss(g)"
-            >{{ gi > 0 ? '；' : '' }}{{ g }}</span>
+            <template v-for="(g, gi) in glossItems(s)" :key="gi">
+              <span v-if="gi > 0">；</span><span
+                class="gloss"
+                :class="{ 'gloss-important': importantSet.has(g) }"
+                @click.stop="toggleGloss(g)"
+              >{{ g }}</span>
+            </template>
           </span>
           <span class="example" v-if="s.example || s.example_translation">
             <span class="example-en" v-if="s.example">

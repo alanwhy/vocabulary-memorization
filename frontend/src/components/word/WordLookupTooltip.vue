@@ -13,7 +13,7 @@ const { reviewColors, ensureReviewColors } = useReviewColors()
 
 // 弹层也是例句展示入口，复用同一分词与颜色规则，避免它和主卡片出现不同的命中颜色。
 function exampleTokens(example) {
-  return tokenizeExample(example, vocab.lookup)
+  return tokenizeExample(example, vocab.lookup, state.wordKey)
 }
 
 // 音标/词级信息从第一条词性取（平铺模型下每条重复）

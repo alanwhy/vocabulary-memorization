@@ -75,7 +75,11 @@ async function toggleGloss(gloss) {
 function exampleTokens(s) {
   // 闪卡仅突出正在复习的词，避免例句中的其它已收录词提前泄露提示；它们仍可点击查词。
   const currentKey = current.value?.word_key
-  return tokenizeExample(s.example || '', (key) => (key === currentKey ? vocab.lookup(key) : 0))
+  return tokenizeExample(
+    s.example || '',
+    (key) => (key === currentKey ? vocab.lookup(key) : 0),
+    currentKey,
+  )
 }
 
 // 点击例句里的某个 token：单词打开查词 tooltip 并拦截冒泡，非单词放行（可翻面）
@@ -176,13 +180,13 @@ onMounted(() => {
               <div class="sense" v-for="(s, i) in current.senses" :key="i">
                 <span class="pos" v-if="s.pos">{{ s.pos }}</span>
                 <span class="translation">
-                  <span
-                    v-for="(g, gi) in senseGlosses[i]"
-                    :key="gi"
-                    class="gloss"
-                    :class="{ 'gloss-important': importantSet.has(g) }"
-                    @click.stop="toggleGloss(g)"
-                  >{{ gi > 0 ? '；' : '' }}{{ g }}</span>
+                  <template v-for="(g, gi) in senseGlosses[i]" :key="gi">
+                    <span v-if="gi > 0">；</span><span
+                      class="gloss"
+                      :class="{ 'gloss-important': importantSet.has(g) }"
+                      @click.stop="toggleGloss(g)"
+                    >{{ g }}</span>
+                  </template>
                 </span>
                 <span class="example" v-if="s.example || s.example_translation">
                   <span class="example-en" v-if="s.example">
