@@ -21,6 +21,8 @@ const {
   loading,
   error,
   doneCount,
+  groupResults,
+  groupCounts,
   current,
   finished,
   allDone,
@@ -98,10 +100,26 @@ const progress = computed(() => `${Math.min(index.value + 1, cards.value.length)
 
 // “模糊”表示看例句后认出，会比“不认识”更晚复习；“记住”仍会直接归档。
 const RATINGS = [
-  { key: 'again', label: '不认识', emoji: '❌', type: 'danger' },
-  { key: 'fuzzy', label: '模糊', emoji: '🤔', type: 'warning' },
-  { key: 'good', label: '记住', emoji: '✅', type: 'success' },
+  { key: 'again', label: '不认识', resultLabel: '不认识', emoji: '❌', type: 'danger' },
+  { key: 'fuzzy', label: '模糊', resultLabel: '模糊', emoji: '🤔', type: 'warning' },
+  { key: 'good', label: '记住', resultLabel: '认识', emoji: '✅', type: 'success' },
 ]
+
+// 结果只回顾待加强的词，释义和读音复用本组卡片数据，不带例句或学习记录。
+const resultGroups = computed(() =>
+  RATINGS.filter((rating) => rating.key !== 'good').map((rating) => ({
+    ...rating,
+    words: groupResults.value
+      .filter((result) => result.rating === rating.key)
+      .map(({ word }) => ({
+        id: word.id,
+        wordKey: word.word_key,
+        displayWord: word.display_word,
+        phonetic: (word.senses || []).find((sense) => sense.phonetic)?.phonetic || '',
+        translation: (word.senses || []).map((sense) => sense.translation).filter(Boolean).join('；'),
+      })),
+  })),
+)
 
 // 每次展示新卡片（加载/切换到下一张）时自动朗读一次，翻面不重复触发
 watch(current, (wd) => {
@@ -122,6 +140,8 @@ onMounted(() => {
       <span v-if="cards.length" class="progress">{{ progress }}</span>
     </header>
 
+    <p v-if="error" class="error" role="alert">{{ error }}</p>
+
     <div v-if="loading" class="state">加载中...</div>
 
     <div v-else-if="allDone" class="state done">
@@ -129,10 +149,41 @@ onMounted(() => {
       <p class="sub">本次共复习 {{ doneCount }} 张卡片</p>
     </div>
 
-    <div v-else-if="finished" class="state done">
-      <p>本组完成 🎉</p>
-      <p class="sub">本组背完 {{ cards.length }} 张，累计 {{ doneCount }} 张</p>
+    <section v-else-if="finished" class="group-result" aria-label="本组复习结果">
+      <div class="state done result-heading">
+        <p>本组完成 🎉</p>
+        <p class="sub">本组背完 {{ groupResults.length }} 个单词，累计 {{ doneCount }} 个</p>
+      </div>
+
+      <div class="rating-summary" role="list" aria-label="本组认识情况">
+        <div v-for="rating in RATINGS" :key="rating.key" class="rating-stat" :class="rating.key" role="listitem">
+          <strong>{{ groupCounts[rating.key] }}<small> 个</small></strong>
+          <span>{{ rating.resultLabel }}</span>
+        </div>
+      </div>
+
+      <section v-for="group in resultGroups" :key="group.key" class="result-group" :aria-labelledby="`result-${group.key}`">
+        <h3 :id="`result-${group.key}`">{{ group.resultLabel }} <span>{{ group.words.length }} 个</span></h3>
+        <ul v-if="group.words.length" class="result-words">
+          <li v-for="word in group.words" :key="word.id" class="result-word">
+            <div class="result-word-head">
+              <strong>{{ word.displayWord }}</strong>
+              <span class="result-pronunciation">
+                <span v-if="word.phonetic" class="phonetic">{{ word.phonetic }}</span>
+                <button type="button" class="speak-btn" :aria-label="`朗读 ${word.displayWord}`" @click="speakWord(word.wordKey)">🔊</button>
+              </span>
+            </div>
+            <p>{{ word.translation || '暂无释义' }}</p>
+          </li>
+        </ul>
+        <p v-else class="result-empty">本组没有{{ group.resultLabel }}的单词</p>
+      </section>
+
       <button class="reload-btn" @click="loadQueue">再来一组</button>
+    </section>
+
+    <div v-else-if="!current" class="state">
+      <button class="reload-btn" @click="loadQueue">重新加载</button>
     </div>
 
     <template v-else>
@@ -220,8 +271,6 @@ onMounted(() => {
         </div>
       </div>
 
-      <p v-if="error" class="error">{{ error }}</p>
-
       <div class="actions">
         <el-button
           v-for="r in RATINGS"
@@ -284,6 +333,113 @@ onMounted(() => {
   padding: 8px 18px;
   border-radius: 8px;
   cursor: pointer;
+}
+
+.group-result {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.result-heading {
+  padding: 8px 0 0;
+}
+.rating-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+.rating-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 16px 8px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--card-bg);
+}
+.rating-stat strong {
+  font-size: 26px;
+}
+.rating-stat small,
+.rating-stat > span {
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--muted);
+}
+.rating-stat.again strong {
+  color: var(--danger);
+}
+.rating-stat.fuzzy strong {
+  color: var(--el-color-warning);
+}
+.rating-stat.good strong {
+  color: var(--el-color-success);
+}
+.result-group h3 {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0 0 10px;
+  font-size: 16px;
+}
+.result-group h3 span {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 400;
+}
+.result-words {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--card-bg);
+}
+.result-word {
+  padding: 14px 16px;
+  overflow-wrap: anywhere;
+}
+.result-word + .result-word {
+  border-top: 1px solid var(--border);
+}
+.result-word-head,
+.result-pronunciation {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.result-word-head {
+  flex-wrap: wrap;
+}
+.result-word-head > strong {
+  font-size: 18px;
+}
+.result-pronunciation .phonetic {
+  color: var(--muted);
+  font-size: 13px;
+}
+.result-pronunciation .speak-btn {
+  flex-shrink: 0;
+  border: none;
+  background: none;
+  padding: 4px;
+  font-size: 16px;
+  cursor: pointer;
+}
+.result-word p {
+  margin: 6px 0 0;
+  font-size: 14px;
+  line-height: 1.6;
+}
+.result-empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: 14px;
+}
+.group-result .reload-btn {
+  align-self: center;
+  margin-top: 0;
 }
 
 /* 3D 翻转：外层提供透视，内层负责 rotateY，前后两面子叠在同一 grid 格 */

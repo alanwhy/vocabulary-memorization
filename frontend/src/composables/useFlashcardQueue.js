@@ -10,6 +10,8 @@ const submitting = ref(false)
 const loading = ref(false)
 const error = ref('')
 const doneCount = ref(0)
+// 与队列进度一起保留本组成功评分，切出页面再回来仍能查看结果。
+const groupResults = ref([])
 let loaded = false
 
 const current = computed(() => cards.value[index.value] ?? null)
@@ -17,17 +19,25 @@ const current = computed(() => cards.value[index.value] ?? null)
 const finished = computed(() => !loading.value && loaded && index.value >= cards.value.length)
 // 真正没有待复习单词（组为空）
 const allDone = computed(() => finished.value && cards.value.length === 0)
+const groupCounts = computed(() => ({
+  again: groupResults.value.filter((result) => result.rating === 'again').length,
+  fuzzy: groupResults.value.filter((result) => result.rating === 'fuzzy').length,
+  good: groupResults.value.filter((result) => result.rating === 'good').length,
+}))
 
 // 翻转过渡时长（ms），需与 .flip-inner 的 transition 时长保持一致
 const FLIP_MS = 500
 
 async function loadQueue() {
+  if (loading.value || submitting.value) return
   loading.value = true
   error.value = ''
   try {
     cards.value = await apiGet('/api/flashcards/queue')
     index.value = 0
     flipped.value = false
+    // 只有下一组加载成功才清空结果，加载失败时仍可回顾上一组并重试。
+    groupResults.value = []
     loaded = true
   } catch (e) {
     error.value = e.message || '加载失败'
@@ -43,16 +53,19 @@ function ensureQueue() {
 }
 
 function flip() {
-  if (submitting.value) return
+  if (!current.value || loading.value || submitting.value) return
   flipped.value = !flipped.value
 }
 
 async function rate(rating) {
-  if (!current.value || submitting.value) return
+  if (!current.value || loading.value || submitting.value) return
+  const word = current.value
   submitting.value = true
   error.value = ''
   try {
-    await apiPost('/api/flashcards/review', { id: current.value.id, rating })
+    await apiPost('/api/flashcards/review', { id: word.id, rating })
+    // 按本组实际选择统计，不使用历史背诵次数；失败的评分不记入结果。
+    groupResults.value.push({ word, rating })
     doneCount.value += 1
     if (flipped.value) {
       // 先翻回正面（仍是当前单词），等翻转动画结束再切下一张，
@@ -77,6 +90,8 @@ export function useFlashcardQueue() {
     loading,
     error,
     doneCount,
+    groupResults,
+    groupCounts,
     current,
     finished,
     allDone,
