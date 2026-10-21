@@ -9,6 +9,7 @@ import { useTranslatingPoll } from '@/composables/useTranslatingPoll'
 import { refreshVocabularyIndex } from '@/composables/useVocabularyIndex'
 import LoginForm from '@/components/auth/LoginForm.vue'
 import WordList from '@/components/word/WordList.vue'
+import { useFlashcardQueue } from '@/composables/useFlashcardQueue'
 
 const auth = useAuthStore()
 
@@ -195,6 +196,12 @@ onMounted(() => {
     nextTick(() => wordInputRef.value?.focus())
   }
 })
+// 只更新查询内容，保留列表排序、分页与复习状态。
+function handleCorrected(fresh) {
+  useFlashcardQueue().updateContent(fresh)
+  const word = words.value.find((w) => w.id === fresh.id)
+  if (word) Object.assign(word, { senses: fresh.senses, translating: fresh.translating })
+}
 </script>
 
 <template>
@@ -244,6 +251,7 @@ onMounted(() => {
         @delete="deleteWord"
         @retry="handleRetry"
         @set-important="handleSetImportant"
+        @corrected="handleCorrected"
         @load-more="loadMore"
       />
 

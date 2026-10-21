@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, watch } from 'vue'
+import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import { apiPut } from '@/api/client'
 import { useVocabularyIndex } from '@/composables/useVocabularyIndex'
 import { useWordLookup } from '@/composables/useWordLookup'
@@ -8,6 +8,7 @@ import { useFlashcardQueue } from '@/composables/useFlashcardQueue'
 import { speakWord } from '@/composables/usePronunciation'
 import { tokenizeExample, splitWordRef } from '@/utils/highlight'
 import { countBadgeClass, reviewColorStyle } from '@/utils/reviewLevel'
+import WordCorrectionButton from '@/components/word/WordCorrectionButton.vue'
 import { splitGlosses } from '@/utils/gloss'
 
 const vocab = useVocabularyIndex()
@@ -30,6 +31,8 @@ const {
   ensureQueue,
   flip,
   rate,
+  refreshContent,
+  updateContent,
 } = useFlashcardQueue()
 // 词级强化信息（音标/词根词缀/近反义）从第一条词性取（平铺模型下每条重复）
 const firstSense = computed(() => (current.value?.senses && current.value.senses[0]) || {})
@@ -45,6 +48,7 @@ const enrichGroups = computed(() => {
   return [
     mk('近义词', firstSense.value.synonyms),
     mk('反义词', firstSense.value.antonyms),
+    mk('派生词', firstSense.value.derivatives),
     mk('形近词', firstSense.value.lookalikes),
   ].filter((g) => g.refs.length)
 })
@@ -122,12 +126,17 @@ const resultGroups = computed(() =>
 )
 
 // 每次展示新卡片（加载/切换到下一张）时自动朗读一次，翻面不重复触发
-watch(current, (wd) => {
-  if (wd) speakWord(wd.word_key)
+watch(() => current.value?.id, () => {
+  if (current.value) speakWord(current.value.word_key)
 })
+const correcting = ref(false)
+let contentTimer
+onBeforeUnmount(() => clearInterval(contentTimer))
 
 onMounted(() => {
   ensureQueue()
+  refreshContent()
+  contentTimer = setInterval(refreshContent, 2000)
   vocab.ensure()
   ensureReviewColors()
 })
@@ -187,7 +196,9 @@ onMounted(() => {
     </div>
 
     <template v-else>
-      <div class="flip" :class="{ flipped }" @click="flip">
+      <WordCorrectionButton :word="current" :disabled="submitting" @busy="correcting = $event" @corrected="updateContent" />
+      <p v-if="current.translating" class="state" role="status">正在补全单词内容...</p>
+      <div class="flip" :class="{ flipped }" @click="!correcting && flip()">
         <div class="flip-inner">
           <div class="face front">
             <span class="front-count" :class="countBadgeClass(current.review_count)" :style="reviewColorStyle(current.review_count, reviewColors)">×{{ current.review_count }}</span>
@@ -278,7 +289,7 @@ onMounted(() => {
           class="rate-btn"
           :type="r.type"
           size="large"
-          :disabled="submitting"
+          :disabled="submitting || correcting || current.translating"
           @click="rate(r.key)"
         >
           {{ r.emoji }} {{ r.label }}

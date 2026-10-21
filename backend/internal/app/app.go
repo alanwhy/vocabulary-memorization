@@ -52,10 +52,13 @@ type WordStore interface {
 	DeleteByWordKey(ctx context.Context, wordKey string) (int64, error)
 	DeleteByWordKeys(ctx context.Context, wordKeys []string) (int64, error)
 	SetArchived(ctx context.Context, id, userID int, archived bool) (int64, error)
+	TranslationSenses(ctx context.Context, id int) ([]model.Sense, error)
 	UpdateSenses(ctx context.Context, id int, sensesJSON []byte) error
 	UpdateImportantGlosses(ctx context.Context, id, userID int, glossesJSON []byte) error
 	MarkTranslationStarted(ctx context.Context, id int, now time.Time) error
 	MarkTranslating(ctx context.Context, id int, now time.Time) error
+	ClearTranslating(ctx context.Context, id int) error
+	TryMarkTranslating(ctx context.Context, id int, now time.Time) (bool, error)
 	FindTranslating(ctx context.Context) ([]model.Word, error)
 	FindTranslatingStale(ctx context.Context, threshold time.Time) ([]model.Word, error)
 	FindTranslatingByUser(ctx context.Context, userID int) ([]model.Word, error)
@@ -68,6 +71,7 @@ type DictionaryStore interface {
 	UpsertOccurrence(ctx context.Context, wordKey, displayWord string, now time.Time) error
 	LookupSenses(ctx context.Context, wordKey string) ([]byte, error)
 	SaveSenses(ctx context.Context, wordKey string, sensesJSON []byte) error
+	ReplaceSenses(ctx context.Context, wordKey string, sensesJSON []byte) error
 	VocabularyIndex(ctx context.Context) ([]model.VocabularyItem, error)
 	List(ctx context.Context) ([]model.DictionaryEntry, error)
 	ListPage(ctx context.Context, keyword, status string, limit, offset int) ([]model.DictionaryEntry, error)
@@ -118,6 +122,8 @@ type App struct {
 	bgCancel     context.CancelFunc
 	translateSem chan struct{}
 	translateWG  sync.WaitGroup
+	// 同词键的普通补全与纠错串行，等待后普通补全再次检查缓存以避免重复模型调用。
+	lookupLocks sync.Map
 }
 
 // New 创建应用实例并初始化共享后台任务上下文；具体 repository 由组合根负责创建。

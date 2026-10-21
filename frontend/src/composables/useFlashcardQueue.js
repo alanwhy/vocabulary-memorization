@@ -60,6 +60,7 @@ function flip() {
 async function rate(rating) {
   if (!current.value || loading.value || submitting.value) return
   const word = current.value
+  if (word.translating) return
   submitting.value = true
   error.value = ''
   try {
@@ -81,6 +82,35 @@ async function rate(rating) {
   }
 }
 
+// 本地内容版本防止较早的轮询响应覆盖已成功纠错的新内容。
+const contentVersions = new Map()
+// 仅合并内容字段，后台补查/纠错不改变队列位置、评分结果或朗读触发。
+function updateContent(fresh) {
+  const word = cards.value.find((w) => w.id === fresh.id)
+  if (word) {
+    contentVersions.set(fresh.id, (contentVersions.get(fresh.id) || 0) + 1)
+    Object.assign(word, { senses: fresh.senses, translating: fresh.translating })
+  }
+}
+let refreshing = false
+async function refreshContent() {
+  if (refreshing) return
+  const pending = cards.value.filter((w) => w.translating)
+  if (!pending.length) return
+  const versions = new Map(pending.map((w) => [w.id, contentVersions.get(w.id) || 0]))
+  refreshing = true
+  try {
+    const fresh = await apiGet(`/api/words/translating?ids=${pending.map((w) => w.id).join(',')}`)
+    for (const word of fresh) {
+      if (versions.get(word.id) === (contentVersions.get(word.id) || 0)) updateContent(word)
+    }
+  } catch (e) {
+    error.value = e.message || '补全状态查询失败，请重试'
+  } finally {
+    refreshing = false
+  }
+}
+
 export function useFlashcardQueue() {
   return {
     cards,
@@ -99,5 +129,7 @@ export function useFlashcardQueue() {
     ensureQueue,
     flip,
     rate,
+    refreshContent,
+    updateContent,
   }
 }

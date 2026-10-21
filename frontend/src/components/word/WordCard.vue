@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { formatTime } from '@/utils/format'
 import { countBadgeClass, reviewColorStyle } from '@/utils/reviewLevel'
 import { useReviewColors } from '@/composables/useReviewColors'
@@ -7,13 +7,15 @@ import { useVocabularyIndex } from '@/composables/useVocabularyIndex'
 import { useWordLookup } from '@/composables/useWordLookup'
 import { speakWord } from '@/composables/usePronunciation'
 import { tokenizeExample, splitWordRef } from '@/utils/highlight'
+import WordCorrectionButton from './WordCorrectionButton.vue'
 import { splitGlosses } from '@/utils/gloss'
 
 const props = defineProps({
   word: { type: Object, required: true },
   mode: { type: String, default: 'active' }, // 'active' | 'archived'
 })
-const emit = defineEmits(['archive', 'unarchive', 'delete', 'retry', 'set-important'])
+const emit = defineEmits(['archive', 'unarchive', 'delete', 'retry', 'set-important', 'corrected'])
+const correcting = ref(false)
 
 const vocab = useVocabularyIndex()
 const lookup = useWordLookup()
@@ -48,6 +50,7 @@ const enrichGroups = computed(() => {
   return [
     mk('近义词', first.value.synonyms),
     mk('反义词', first.value.antonyms),
+    mk('派生词', first.value.derivatives),
     mk('形近词', first.value.lookalikes),
   ].filter((g) => g.refs.length)
 })
@@ -155,6 +158,7 @@ function openLookup(e, word) {
       </div>
     </div>
     <div class="word-actions">
+      <WordCorrectionButton :word="word" @busy="correcting = $event" @corrected="$emit('corrected', $event)" />
       <template v-if="mode === 'active'">
         <button
           v-if="word.archived"
@@ -167,7 +171,7 @@ function openLookup(e, word) {
         <button
           v-else-if="!word.translating && !hasError && validSenses.length"
           class="action-btn primary"
-          @click="$emit('archive', word)"
+          :disabled="correcting" @click="$emit('archive', word)"
         >
           归档
         </button>
@@ -175,8 +179,8 @@ function openLookup(e, word) {
           重试
         </button>
       </template>
-      <button v-else class="action-btn primary" @click="$emit('unarchive', word)">取消归档</button>
-      <button class="action-btn danger" @click="$emit('delete', word)">删除</button>
+      <button v-else class="action-btn primary" :disabled="correcting" @click="$emit('unarchive', word)">取消归档</button>
+      <button class="action-btn danger" :disabled="correcting" @click="$emit('delete', word)">删除</button>
     </div>
   </li>
 </template>

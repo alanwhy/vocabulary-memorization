@@ -12,11 +12,11 @@ import (
 )
 
 // Sense 一个单词的一个词性 + 对应释义。
-// 强化字段平铺在这里：phonetic/root/affix/synonyms/antonyms/lookalikes 是词级信息，多词性下会重复存储，
+// 强化字段平铺在这里：phonetic/root/affix/synonyms/antonyms/lookalikes/derivatives 是词级信息，多词性下会重复存储，
 // 前端只取第一条词性的词级信息展示；example 是词义级，每条词性对应一句英文例句，
 // example_translation 是该例句的中文翻译。synonyms/antonyms/lookalikes 每个元素形如
 // "chance（机会）"，英文词后紧跟中文释义，前端无需二次拆解即可直接展示。
-// lookalikes 是最后加入的字段，故意不用 omitempty：即使没有形近词也序列化成 []，
+// 关系字段故意不用 omitempty：即使无对应词也保留字段，
 // 这样「字段是否为 nil」就能区分「最新 prompt 查过」和「老数据没这个 key」（见 SensesEnriched）。
 type Sense struct {
 	Pos                string   `json:"pos"`
@@ -29,21 +29,21 @@ type Sense struct {
 	Synonyms           []string `json:"synonyms,omitempty"`
 	Antonyms           []string `json:"antonyms,omitempty"`
 	Lookalikes         []string `json:"lookalikes"`
+	// nil 表示旧数据尚未查询派生词，非 nil（包括 []）表示已查询，不能用 omitempty。
+	Derivatives []string `json:"derivatives"`
 }
 
-// SensesEnriched 判断一组释义是否已用最新 prompt 强化过（含例句/词根词缀/近反义/形近词）。
-// 以 lookalikes（形近词，最后加入的字段）是否为 nil 作为判据：最新 prompt 一定会返回
-// lookalikes 字段，即使没有形近词也是空数组 []，反序列化后是非 nil 空切片；老数据没这个 key，
-// 反序列化后是 nil。这样既能给缺形近词的老词补全，又不会在已齐全时重复调用大模型。
+// SensesEnriched 用形近词、派生词字段是否非 nil 判断查询版本；[] 也是完成，
+// 缺字段的旧 JSON 为 nil，遇到录入/闪卡再补全，避免无派生词时重复调用模型。
 func SensesEnriched(senses []Sense) bool {
 	if len(senses) == 0 {
 		return false
 	}
-	return senses[0].Lookalikes != nil
+	return senses[0].Lookalikes != nil && senses[0].Derivatives != nil
 }
 
 // SensesNeedEnrichment 判断释义是否「有正常释义但缺强化字段」——缺少例句/词根词缀/
-// 近反义/形近词（老数据用旧 prompt 查的，lookalikes 为 nil）。空释义与 error 占位
+// 近反义/形近词/派生词（老数据的关系字段为 nil）。空释义与 error 占位
 // 返回 false：空释义由录入查词链路处理，error 占位由单词列表的用户重试处理。
 // 只针对「有释义但没强化过」的词，避免重复调用大模型。
 func SensesNeedEnrichment(senses []Sense) bool {
@@ -51,7 +51,7 @@ func SensesNeedEnrichment(senses []Sense) bool {
 		return false
 	}
 	s := senses[0]
-	return s.Pos != "error" && s.Lookalikes == nil
+	return s.Pos != "error" && s.Pos != "系统提示" && !SensesEnriched(senses)
 }
 
 // mergeSenseEnrichment 把 src 的非空强化字段合并进 dst，字段级「首个非空值优先」：
@@ -80,6 +80,9 @@ func mergeSenseEnrichment(dst *Sense, src Sense) {
 	}
 	if len(dst.Lookalikes) == 0 && len(src.Lookalikes) > 0 {
 		dst.Lookalikes = src.Lookalikes
+	}
+	if dst.Derivatives == nil || len(src.Derivatives) > 0 && len(dst.Derivatives) == 0 {
+		dst.Derivatives = src.Derivatives
 	}
 }
 

@@ -184,6 +184,30 @@ func (a *App) sweepStuckTranslations() {
 // translateAndSave 在后台异步查词，查完再把释义写回数据库和全局词库缓存，不阻塞单词的录入请求；
 // 查词失败会按退避间隔重试，避免偶发失败导致释义永久空白；ctx 取消时（进程关闭）提前退出。
 func (a *App) translateAndSave(ctx context.Context, wordID int, wordKey string) {
+	// 历史补全失败时保留原来的正常释义，不能用失败占位覆盖可用内容。
+	previous, err := a.words.TranslationSenses(ctx, wordID)
+	if err != nil {
+		// 取不到原内容时不能以空内容恢复；留给周期恢复任务重试。
+		log.Printf("读取查词原内容失败 id=%d: %v", wordID, err)
+		return
+	}
+	oldRaw, _ := json.Marshal(previous)
+	completed := false
+	defer func() {
+		if !completed {
+			a.restoreWordSenses(wordID, oldRaw)
+		}
+	}()
+	unlock, err := a.lockWordLookup(ctx, wordKey)
+	if err != nil {
+		return
+	}
+	defer unlock()
+	// 同词其他任务可能已完成，等待后复查全局缓存，不再请求模型。
+	if cached, hit := a.lookupDictionarySenses(ctx, wordKey); hit && sensesEnriched(cached) {
+		completed = a.saveWordSenses(ctx, wordID, wordKey, cached) == nil
+		return
+	}
 	// 标记本轮查词开始时间，供周期性扫描判断任务是否卡死。每次重新触发都会刷新，
 	// 避免把正在合法重试中的任务误判成卡死。
 	if err := a.words.MarkTranslationStarted(ctx, wordID, time.Now()); err != nil {
@@ -195,12 +219,14 @@ func (a *App) translateAndSave(ctx context.Context, wordID int, wordKey string) 
 		result := translateWord(ctx, wordKey, cfg)
 		if result.IsSpellingError {
 			// 拼写错误不是重试能解决的，直接写回拼写错误占位，不进入重试循环
-			a.saveWordSenses(ctx, wordID, wordKey, spellingErrorSenses)
+			if !sensesNeedEnrichment(previous) {
+				completed = a.saveWordSenses(ctx, wordID, wordKey, spellingErrorSenses) == nil
+			}
 			return
 		}
 		merged := mergeSensesByPos(result.Senses)
 		if len(merged) > 0 {
-			a.saveWordSenses(ctx, wordID, wordKey, merged)
+			completed = a.saveWordSenses(ctx, wordID, wordKey, merged) == nil
 			a.saveDictionarySenses(ctx, wordKey, merged)
 			// 查词成功后后台预生成发音（豆包 TTS），点喇叭时秒响；失败静默，播放时再兜底
 			a.spawnTTS(wordKey)
@@ -210,7 +236,9 @@ func (a *App) translateAndSave(ctx context.Context, wordID int, wordKey string) 
 			log.Printf("查词多次重试后仍失败，放弃 word=%s", wordKey)
 			// 写入失败占位提示而非空释义，让用户和管理员都能明确看到「查询失败」。
 			// 只写用户自己的 words，不写全局词库缓存，避免污染后续命中缓存的其它用户。
-			a.saveWordSenses(ctx, wordID, wordKey, failedSenses)
+			if !sensesNeedEnrichment(previous) {
+				completed = a.saveWordSenses(ctx, wordID, wordKey, failedSenses) == nil
+			}
 			return
 		}
 		delay := translateRetryDelays[attempt]
@@ -224,15 +252,17 @@ func (a *App) translateAndSave(ctx context.Context, wordID int, wordKey string) 
 	}
 }
 
-func (a *App) saveWordSenses(ctx context.Context, wordID int, wordKey string, senses []Sense) {
+func (a *App) saveWordSenses(ctx context.Context, wordID int, wordKey string, senses []Sense) error {
 	sensesJSON, err := json.Marshal(senses)
 	if err != nil {
 		log.Printf("序列化释义失败 word=%s: %v", wordKey, err)
-		sensesJSON = []byte("[]")
+		return err
 	}
 	if err := a.words.UpdateSenses(ctx, wordID, sensesJSON); err != nil {
 		log.Printf("写回释义失败 word=%s id=%d: %v", wordKey, wordID, err)
+		return err
 	}
+	return nil
 }
 
 // tryIncrementExisting 如果当前用户名下 wordKey 已存在，则次数 +1、更新最近背诵时间，并写响应；
@@ -254,16 +284,7 @@ func (a *App) tryIncrementExisting(w http.ResponseWriter, r *http.Request, userI
 		}
 	}
 
-	// 再次录入同一词时，如果释义还是旧数据（缺音标等强化字段）且不在查词中，后台补全一次；
-	// translating 标志既让前端显示「查词中」并轮询，也防止快速连点重复触发查词。
-	if !sensesEnriched(existing.Senses) && !existing.Translating {
-		if err := a.words.MarkTranslating(r.Context(), existing.ID, now); err != nil {
-			log.Printf("标记补全状态失败 word=%s: %v", wordKey, err)
-		} else {
-			existing.Translating = true
-			a.spawnTranslation(existing.ID, existing.WordKey)
-		}
-	}
+	a.ensureWordEnrichment(r.Context(), &existing)
 
 	newCount := existing.ReviewCount + 1
 	if err := a.words.IncrementReview(r.Context(), existing.ID, newCount, now); err != nil {
@@ -458,6 +479,9 @@ func (a *App) handleFlashcardQueue(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "查询失败")
 		return
 	}
+	for i := range list {
+		a.ensureWordEnrichment(r.Context(), &list[i])
+	}
 	writeJSON(w, http.StatusOK, list)
 }
 
@@ -507,14 +531,7 @@ func (a *App) handleFlashcardReview(w http.ResponseWriter, r *http.Request) {
 	wd.DueAt = &dueAt
 	wd.Archived = archived
 
-	// 释义缺扩展信息且用户点「不认识」时，后台补一次查词（复用录入查词链路）
-	if req.Rating == "again" && !wd.Translating && sensesNeedEnrichment(wd.Senses) {
-		if err := a.words.MarkTranslating(r.Context(), req.ID, now); err != nil {
-			log.Printf("标记释义补全失败 word=%s id=%d: %v", wd.WordKey, req.ID, err)
-		} else {
-			a.spawnTranslation(req.ID, wd.WordKey)
-		}
-	}
+	a.ensureWordEnrichment(r.Context(), &wd)
 
 	writeJSON(w, http.StatusOK, wd)
 }
@@ -597,12 +614,15 @@ func (a *App) handleRetryWord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := a.words.MarkTranslating(r.Context(), id, time.Now()); err != nil {
+	started, err := a.words.TryMarkTranslating(r.Context(), id, time.Now())
+	if err != nil {
 		log.Printf("标记重查状态失败 word=%s id=%d: %v", wd.WordKey, id, err)
 		writeError(w, http.StatusInternalServerError, "重新查询失败")
 		return
 	}
-	a.spawnTranslation(id, wd.WordKey)
+	if started {
+		a.spawnTranslation(id, wd.WordKey)
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 

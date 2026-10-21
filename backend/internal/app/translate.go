@@ -16,8 +16,8 @@ type translateResult struct {
 
 // translateWord 调用 DeepSeek 兜底模型查词。查词失败不阻塞记录单词本身（调用方仍会
 // 把单词存进数据库，只是释义留空），重试由调用方的退避逻辑负责。
-func translateWord(ctx context.Context, wordKey string, cfg deepseekConfig) translateResult {
-	senses, isSpellingError, err := lookupDeepSeek(ctx, wordKey, cfg)
+func translateWord(ctx context.Context, wordKey string, cfg deepseekConfig, reason ...string) translateResult {
+	senses, isSpellingError, err := lookupDeepSeek(ctx, wordKey, cfg, reason...)
 	if err != nil {
 		log.Printf("deepseek 查词失败 word=%s err=%v", wordKey, err)
 		return translateResult{Senses: nil, Source: "none"}

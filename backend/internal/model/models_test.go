@@ -73,7 +73,7 @@ func TestApplySRSScheduling(t *testing.T) {
 }
 
 // TestSensesEnriched 覆盖「是否已用最新 prompt 强化」判定的各边界。
-// 判据是 lookalikes（形近词，最后加入的字段）是否为 nil：非 nil（含空数组）算已强化，nil 算未强化。
+// 最新关系字段必须均非 nil，空数组同样表示已经查询，无需再次请求模型。
 func TestSensesEnriched(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -83,9 +83,10 @@ func TestSensesEnriched(t *testing.T) {
 		{"空数组", nil, false},
 		{"无任何强化字段", []Sense{{Pos: "n.", Translation: "苹果"}}, false},
 		{"只有音标无形近词", []Sense{{Pos: "n.", Translation: "苹果", Phonetic: "/ˈæp(ə)l/"}}, false},
-		{"形近词为空数组", []Sense{{Lookalikes: []string{}}}, true},
-		{"有形近词", []Sense{{Lookalikes: []string{"transit（过境）"}}}, true},
-		{"多词性第一条有形近词", []Sense{{Lookalikes: []string{}}, {Pos: "v.", Translation: "预订"}}, true},
+		{"旧形近词无派生词", []Sense{{Lookalikes: []string{}}}, false},
+		{"两类为空数组", []Sense{{Lookalikes: []string{}, Derivatives: []string{}}}, true},
+		{"有形近词", []Sense{{Lookalikes: []string{"transit（过境）"}, Derivatives: []string{}}}, true},
+		{"多词性第一条有形近词", []Sense{{Lookalikes: []string{}, Derivatives: []string{"books（复数：书）"}}, {Pos: "v.", Translation: "预订"}}, true},
 	}
 	for _, c := range cases {
 		if got := SensesEnriched(c.senses); got != c.want {
@@ -117,5 +118,24 @@ func TestMergeSensesByPosPreservesEnrichment(t *testing.T) {
 	}
 	if len(merged.Synonyms) != 1 || merged.Synonyms[0] != "pome" {
 		t.Fatalf("Synonyms = %v, want 保留 [pome]", merged.Synonyms)
+	}
+}
+
+func TestDerivativesMergeAndHistory(t *testing.T) {
+	input := []Sense{{Pos: "v.", Translation: "工作"}, {Pos: "v.", Translation: "运作", Derivatives: []string{}}}
+	got := MergeSensesByPos(input)
+	if got[0].Derivatives == nil {
+		t.Fatal("空派生数组在合并中不能丢失")
+	}
+	for _, pos := range []string{"error", "系统提示"} {
+		if SensesNeedEnrichment([]Sense{{Pos: pos}}) {
+			t.Fatal("错误占位不应自动补查")
+		}
+	}
+	if !SensesNeedEnrichment([]Sense{{Pos: "v.", Translation: "工作", Lookalikes: []string{}}}) {
+		t.Fatal("旧派生字段必须补查")
+	}
+	if SensesNeedEnrichment([]Sense{{Pos: "v.", Lookalikes: []string{}, Derivatives: []string{}}}) {
+		t.Fatal("[] 已完成，不应重复补查")
 	}
 }

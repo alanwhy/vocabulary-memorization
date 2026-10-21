@@ -244,6 +244,16 @@ func (r *WordRepository) MarkTranslating(ctx context.Context, id int, now time.T
 	return err
 }
 
+// TryMarkTranslating 原子预约查词；并发录入、复习补全和纠错只允许一个任务持有词条。
+func (r *WordRepository) TryMarkTranslating(ctx context.Context, id int, now time.Time) (bool, error) {
+	res, err := r.db.ExecContext(ctx, `UPDATE words SET translating = 1, translation_started_at = ? WHERE id = ? AND translating = 0`, now, id)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
 // FindTranslating 返回进程重启前尚未完成的全部查词任务。
 func (r *WordRepository) FindTranslating(ctx context.Context) ([]model.Word, error) {
 	rows, err := r.db.QueryContext(ctx, `SELECT id, word_key FROM words WHERE translating = 1`)
@@ -437,4 +447,21 @@ func cloudMeaning(sensesRaw []byte) string {
 		translations = append(translations, sense.Translation)
 	}
 	return strings.Join(translations, "；")
+}
+
+// TranslationSenses 仅供后台任务恢复旧内容，HTTP 入口必须先校验词条归属。
+func (r *WordRepository) TranslationSenses(ctx context.Context, id int) ([]model.Sense, error) {
+	var raw []byte
+	if err := r.db.QueryRowContext(ctx, `SELECT senses FROM words WHERE id = ?`, id).Scan(&raw); err != nil {
+		return nil, err
+	}
+	var senses []model.Sense
+	err := json.Unmarshal(raw, &senses)
+	return senses, err
+}
+
+// ClearTranslating 仅解除查词预约，不覆盖未知或已更新的内容。
+func (r *WordRepository) ClearTranslating(ctx context.Context, id int) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE words SET translating = 0 WHERE id = ?`, id)
+	return err
 }

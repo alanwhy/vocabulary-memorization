@@ -35,6 +35,7 @@ func (a *App) Handler(staticDir string) http.Handler {
 	mux.HandleFunc("POST /api/words/{id}/archive", withTimeout(defaultRequestTimeout)(a.requireAuth(a.handleArchiveWord)))
 	mux.HandleFunc("POST /api/words/{id}/unarchive", withTimeout(defaultRequestTimeout)(a.requireAuth(a.handleUnarchiveWord)))
 	mux.HandleFunc("POST /api/words/{id}/retry", withTimeout(defaultRequestTimeout)(a.requireAuth(a.handleRetryWord)))
+	mux.HandleFunc("POST /api/words/{id}/correct", withTimeout(dictionaryRetryTimeout)(a.requireAuth(a.handleCorrectWord)))
 	mux.HandleFunc("PUT /api/words/{id}/important", withTimeout(defaultRequestTimeout)(a.requireAuth(a.handleSetWordImportant)))
 	mux.HandleFunc("GET /api/flashcards/queue", withTimeout(defaultRequestTimeout)(a.requireAuth(a.handleFlashcardQueue)))
 	mux.HandleFunc("POST /api/flashcards/review", withTimeout(defaultRequestTimeout)(a.requireAuth(a.handleFlashcardReview)))

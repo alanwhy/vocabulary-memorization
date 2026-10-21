@@ -64,9 +64,20 @@ func (r *DictionaryRepository) SaveSenses(ctx context.Context, wordKey string, s
 		   AND (senses IS NULL
 		        OR JSON_LENGTH(senses) = 0
 		        OR JSON_EXTRACT(senses, '$[0].phonetic') IS NULL
-		        OR JSON_EXTRACT(senses, '$[0].phonetic') = '')`,
+		        OR JSON_EXTRACT(senses, '$[0].phonetic') = ''
+                OR JSON_EXTRACT(senses, '$[0].lookalikes') IS NULL
+                OR JSON_TYPE(JSON_EXTRACT(senses, '$[0].lookalikes')) = 'NULL'
+                OR JSON_EXTRACT(senses, '$[0].derivatives') IS NULL
+                OR JSON_TYPE(JSON_EXTRACT(senses, '$[0].derivatives')) = 'NULL')`,
 		sensesJSON, wordKey,
 	)
+	return err
+}
+
+// ReplaceSenses 用于明确纠错：即使缓存已有完整内容也必须替换，不影响出现次数。
+func (r *DictionaryRepository) ReplaceSenses(ctx context.Context, wordKey string, sensesJSON []byte) error {
+	_, err := r.db.ExecContext(ctx, `INSERT INTO word_dictionary (word_key, display_word, senses, occurrence_count, first_seen_at, last_updated_at)
+ VALUES (?, ?, ?, 0, ?, ?) ON DUPLICATE KEY UPDATE senses = ?, last_updated_at = ?`, wordKey, wordKey, sensesJSON, time.Now(), time.Now(), sensesJSON, time.Now())
 	return err
 }
 

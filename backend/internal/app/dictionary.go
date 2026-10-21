@@ -36,7 +36,7 @@ func (a *App) lookupDictionarySenses(ctx context.Context, wordKey string) ([]Sen
 	return senses, true
 }
 
-// saveDictionarySenses 把查到的释义写入全局词库缓存，只在词库里还没有缓存内容时写入，避免并发下互相覆盖
+// saveDictionarySenses 保存普通查词结果；空缓存或缺最新关系字段的旧缓存可以补齐。
 func (a *App) saveDictionarySenses(ctx context.Context, wordKey string, senses []Sense) {
 	sensesJSON, err := json.Marshal(senses)
 	if err != nil {

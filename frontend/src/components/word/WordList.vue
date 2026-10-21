@@ -10,7 +10,7 @@ defineProps({
   loading: { type: Boolean, default: false },
   hasMore: { type: Boolean, default: false },
 })
-const emit = defineEmits(['archive', 'unarchive', 'delete', 'retry', 'set-important', 'load-more'])
+const emit = defineEmits(['archive', 'unarchive', 'delete', 'retry', 'set-important', 'load-more', 'corrected'])
 
 // 哨兵滚进视口就要下一页；重复触发无害，usePaginatedList 会用 loading / hasMore 挡住
 const sentinelRef = ref(null)
@@ -29,6 +29,7 @@ useInfiniteScroll(sentinelRef, () => emit('load-more'))
         @unarchive="$emit('unarchive', w)"
         @delete="$emit('delete', w)"
         @retry="$emit('retry', w)"
+        @corrected="$emit('corrected', $event)"
         @set-important="$emit('set-important', $event)"
       />
     </ul>

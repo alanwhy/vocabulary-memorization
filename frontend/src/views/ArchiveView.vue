@@ -4,6 +4,7 @@ import { apiGet } from '@/api/client'
 import { usePaginatedList } from '@/composables/usePaginatedList'
 import { useWordActions } from '@/composables/useWordActions'
 import WordList from '@/components/word/WordList.vue'
+import { useFlashcardQueue } from '@/composables/useFlashcardQueue'
 
 // 归档列表没有排序切换，固定用后端默认的按次数排序
 const list = usePaginatedList((page, limit) =>
@@ -13,6 +14,12 @@ const { items: words, total, loading, hasMore, loaded, errorMsg, loadMore, reset
 const { unarchiveWord, deleteWord } = useWordActions(list)
 
 onMounted(reset)
+// 只更新查询内容，保留列表排序、分页与复习状态。
+function handleCorrected(fresh) {
+  useFlashcardQueue().updateContent(fresh)
+  const word = words.value.find((w) => w.id === fresh.id)
+  if (word) Object.assign(word, { senses: fresh.senses, translating: fresh.translating })
+}
 </script>
 
 <template>
@@ -28,7 +35,8 @@ onMounted(reset)
       :has-more="hasMore"
       @unarchive="unarchiveWord"
       @delete="deleteWord"
-      @load-more="loadMore"
+      @corrected="handleCorrected"
+        @load-more="loadMore"
     />
   </div>
 </template>

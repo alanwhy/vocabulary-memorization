@@ -35,6 +35,7 @@ func TestHandlerRegistersExistingAPIRoutes(t *testing.T) {
 		{http.MethodPost, "/api/words/1/archive", http.StatusUnauthorized},
 		{http.MethodPost, "/api/words/1/unarchive", http.StatusUnauthorized},
 		{http.MethodPost, "/api/words/1/retry", http.StatusUnauthorized},
+		{http.MethodPost, "/api/words/1/correct", http.StatusUnauthorized},
 		{http.MethodPut, "/api/words/1/important", http.StatusUnauthorized},
 		{http.MethodGet, "/api/flashcards/queue", http.StatusUnauthorized},
 		{http.MethodPost, "/api/flashcards/review", http.StatusUnauthorized},
