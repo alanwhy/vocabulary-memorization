@@ -104,9 +104,9 @@ const progress = computed(() => `${Math.min(index.value + 1, cards.value.length)
 
 // “模糊”表示看例句后认出，会比“不认识”更晚复习；“记住”仍会直接归档。
 const RATINGS = [
-  { key: 'again', label: '不认识', resultLabel: '不认识', emoji: '❌', type: 'danger' },
-  { key: 'fuzzy', label: '模糊', resultLabel: '模糊', emoji: '🤔', type: 'warning' },
-  { key: 'good', label: '记住', resultLabel: '认识', emoji: '✅', type: 'success' },
+  { key: 'again', shortcut: '1', label: '不认识', resultLabel: '不认识', emoji: '❌', type: 'danger' },
+  { key: 'fuzzy', shortcut: '2', label: '模糊', resultLabel: '模糊', emoji: '🤔', type: 'warning' },
+  { key: 'good', shortcut: '3', label: '记住', resultLabel: '认识', emoji: '✅', type: 'success' },
 ]
 
 // 结果只回顾待加强的词，释义和读音复用本组卡片数据，不带例句或学习记录。
@@ -130,10 +130,39 @@ watch(() => current.value?.id, () => {
   if (current.value) speakWord(current.value.word_key)
 })
 const correcting = ref(false)
+
+// 快捷键复用按钮动作；输入和弹窗保留自身键盘行为，避免反馈输入时误翻面或评分。
+function onShortcut(event) {
+  if (event.defaultPrevented || event.ctrlKey || event.altKey || event.metaKey || event.isComposing) return
+  const key = event.key.toLowerCase()
+  const rating = RATINGS.find((item) => item.shortcut === key)
+  if (key !== ' ' && key !== 'v' && !rating) return
+  if (!current.value || loading.value || finished.value) return
+
+  const target = event.target
+  if (target instanceof Element && (
+    target.isContentEditable ||
+    target.closest('input, textarea, select, [role="textbox"], [role="dialog"], [role="alertdialog"]')
+  )) return
+  if (lookup.state.open || Array.from(document.querySelectorAll('[role="dialog"], [role="alertdialog"]'))
+    .some((dialog) => dialog.getClientRects().length > 0)) return
+
+  // 捕获阶段阻止空格滚动/点击焦点按钮；长按及提交等待期间不重复执行动作。
+  event.preventDefault()
+  if (event.repeat || submitting.value || correcting.value) return
+  if (key === ' ') flip()
+  else if (key === 'v') speakWord(current.value.word_key)
+  else if (!current.value.translating) rate(rating.key)
+}
+
 let contentTimer
-onBeforeUnmount(() => clearInterval(contentTimer))
+onBeforeUnmount(() => {
+  clearInterval(contentTimer)
+  window.removeEventListener('keydown', onShortcut, true)
+})
 
 onMounted(() => {
+  window.addEventListener('keydown', onShortcut, true)
   ensureQueue()
   refreshContent()
   contentTimer = setInterval(refreshContent, 2000)
@@ -223,7 +252,7 @@ onMounted(() => {
                 @click="onTokenClick($event, t)"
               >{{ t.text }}</span>
             </span>
-            <span class="hint">点击翻面看释义</span>
+            <span class="hint">点击或按空格翻面看释义</span>
           </div>
           <div class="face back">
             <span class="word">{{ current.display_word }}</span>
@@ -295,6 +324,8 @@ onMounted(() => {
           {{ r.emoji }} {{ r.label }}
         </el-button>
       </div>
+
+      <p class="shortcut-hint">空格 翻面 · V 发音 · 1 不认识 · 2 模糊 · 3 记住</p>
     </template>
   </main>
 </template>
@@ -319,6 +350,13 @@ onMounted(() => {
 }
 .progress {
   font-size: 13px;
+  color: var(--muted);
+}
+.shortcut-hint {
+  margin: 0;
+  text-align: center;
+  font-size: 12px;
+  line-height: 1.6;
   color: var(--muted);
 }
 
