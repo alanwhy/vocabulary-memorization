@@ -1,6 +1,7 @@
 <script setup>
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
+import { version as appVersion } from '../../package.json'
 import { useAuthStore } from '@/stores/auth'
 import { apiGet, apiPost, apiPut } from '@/api/client'
 import { usePaginatedList } from '@/composables/usePaginatedList'
@@ -210,7 +211,7 @@ function handleCorrected(fresh) {
     <div v-else>
       <div class="title-row">
         <h1>背单词</h1>
-        <span class="version">v1.18.1</span>
+        <span class="version">v{{ appVersion }}</span>
       </div>
       <div class="input-wrap">
         <el-input
