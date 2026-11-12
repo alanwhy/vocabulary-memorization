@@ -125,6 +125,11 @@ type App struct {
 	translateWG  sync.WaitGroup
 	// 同词键的普通补全与纠错串行，等待后普通补全再次检查缓存以避免重复模型调用。
 	lookupLocks sync.Map
+	// 每用户只保留最近同步任务，状态与后台关闭受同一把锁保护。
+	wordSyncMu       sync.Mutex
+	wordSyncJobs     map[int]wordSyncStatus
+	wordSyncWG       sync.WaitGroup
+	wordSyncStopping bool
 }
 
 // New 创建应用实例并初始化共享后台任务上下文；具体 repository 由组合根负责创建。

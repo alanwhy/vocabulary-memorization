@@ -24,6 +24,9 @@ func (a *App) Initialize() error {
 
 // CancelBackground 先取消后台查词、重试等待和清理循环；HTTP Shutdown 应由组合根随后执行。
 func (a *App) CancelBackground() {
+	a.wordSyncMu.Lock()
+	a.wordSyncStopping = true
+	a.wordSyncMu.Unlock()
 	a.bgCancel()
 }
 
@@ -32,6 +35,7 @@ func (a *App) WaitBackground(timeout time.Duration) bool {
 	done := make(chan struct{})
 	go func() {
 		a.translateWG.Wait()
+		a.wordSyncWG.Wait()
 		close(done)
 	}()
 

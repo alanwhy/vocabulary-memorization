@@ -2,6 +2,10 @@
 import { reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { apiPut, apiPost } from '@/api/client'
+import SyncDictionaryButton from './SyncDictionaryButton.vue'
+
+const emit = defineEmits(['words-synced'])
+const syncingWords = ref(false)
 
 const visible = ref(false)
 const pwForm = reactive({ old_password: '', new_password: '', confirm_password: '' })
@@ -70,7 +74,8 @@ async function resetCounts() {
   <div class="card">
     <div class="action-row">
       <el-button type="primary" @click="visible = true">修改密码</el-button>
-      <el-button type="danger" :loading="resetting" @click="resetCounts">重置次数</el-button>
+      <el-button type="danger" :loading="resetting" :disabled="syncingWords" @click="resetCounts">重置次数</el-button>
+      <SyncDictionaryButton :disabled="resetting" @busy="syncingWords = $event" @synced="emit('words-synced')" />
     </div>
   </div>
 
@@ -101,7 +106,8 @@ async function resetCounts() {
 <style scoped>
 .action-row {
   display: flex;
+  flex-wrap: wrap;
   gap: 12px;
-  align-items: center;
+  align-items: flex-start;
 }
 </style>

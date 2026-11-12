@@ -10,14 +10,20 @@ const auth = useAuthStore()
 // 录入单词数取 total_all_words：含已归档，口径是「这个账号一共录进来多少个词」
 const wordCount = ref(null)
 
-onMounted(async () => {
+/**
+ * 重新读取本人词汇统计，让异步同步完成后的个人中心数量保持准确。
+ * @returns {Promise<void>} 更新数量，查询失败保持现有显示。
+ */
+async function loadWordCount() {
   try {
     const stats = await apiGet('/api/stats')
     wordCount.value = stats.total_all_words
   } catch {
     // 拉不到就显示占位符，不影响个人中心其他信息
   }
-})
+}
+
+onMounted(loadWordCount)
 </script>
 
 <template>
@@ -34,6 +40,6 @@ onMounted(async () => {
       </el-descriptions>
     </div>
 
-    <ChangePasswordDialog />
+    <ChangePasswordDialog @words-synced="loadWordCount" />
   </div>
 </template>

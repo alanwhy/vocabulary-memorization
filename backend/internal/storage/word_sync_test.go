@@ -45,7 +45,12 @@ func TestSyncDictionaryToUserMySQL(t *testing.T) {
 		`INSERT INTO users VALUES (1), (2)`,
 		`INSERT INTO word_dictionary VALUES
 			('apple', 'Apple', '[{"pos":"n.","translation":"苹果"}]', 50),
-			('banana', 'Banana', NULL, 20), ('pear', 'Pear', '[]', 10)`,
+			('banana', 'Banana', '[{"translation":"香蕉"}]', 20), ('pear', 'Pear', '[{"translation":"梨"}]', 10),
+            ('empty', 'Empty', NULL, 0), ('array', 'Array', '[]', 0),
+            ('blank', 'Blank', '[{"translation":"   "}]', 0), ('missing', 'Missing', '[{"pos":"n."}]', 0),
+            ('error', 'Error', '[{"pos":"error","translation":"查询失败"}]', 0),
+			('object', 'Object', '{"translation":"错误结构"}', 0), ('null', 'Null', 'null', 0),
+			('number', 'Number', '[{"translation":42}]', 0), ('boolean', 'Boolean', '[{"translation":true}]', 0)`,
 		`INSERT INTO words (user_id, word_key, display_word, senses, review_count, first_added_at, last_reviewed_at, archived, important_glosses, due_at, interval_days, ease_factor)
 			VALUES (1, 'apple', 'my apple', '[{"translation":"个人释义"}]', 9, '2026-01-01', '2026-02-01', 1, '["个人释义"]', '2026-12-01', 30, 2.80),
 			(2, 'banana', 'other banana', NULL, 7, '2026-01-01', '2026-02-01', 0, NULL, NULL, 0, 2.50)`,
@@ -125,7 +130,7 @@ func TestSyncDictionaryToUserMySQL(t *testing.T) {
 	}
 
 	// 插入阶段失败时整个事务回滚。
-	if _, err := db.Exec(`INSERT INTO word_dictionary VALUES ('rollback', 'Rollback', NULL, 1)`); err != nil {
+	if _, err := db.Exec(`INSERT INTO word_dictionary VALUES ('rollback', 'Rollback', '[{"translation":"回滚"}]', 1)`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`CREATE TRIGGER reject_word_sync BEFORE INSERT ON words FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='test insert failure'`); err != nil {

@@ -127,3 +127,8 @@ backend/internal/storage/words.go
   method      TranslationSenses:453
   method      ClearTranslating:464
   function    NewWordRepository:19
+
+Impact of changing "ProfileView" — 1 affected symbols:
+
+frontend/src/views/ProfileView.vue
+  component   ProfileView:1
