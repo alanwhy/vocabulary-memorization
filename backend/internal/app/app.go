@@ -40,6 +40,7 @@ type SessionStore interface {
 // WordStore 只声明应用层实际使用的个人单词持久化能力。
 type WordStore interface {
 	Insert(ctx context.Context, userID int, wordKey, displayWord string, sensesJSON []byte, translating bool, now time.Time) (int, error)
+	SyncDictionaryToUser(ctx context.Context, userID int, now time.Time) (int64, int, error)
 	FindByUserAndKey(ctx context.Context, userID int, wordKey string) (model.Word, []byte, error)
 	IncrementReview(ctx context.Context, id, newCount int, now time.Time) error
 	ApplyFlashcardReview(ctx context.Context, id, userID, newCount, intervalDays int, easeFactor float64, dueAt, now time.Time, archived bool) error

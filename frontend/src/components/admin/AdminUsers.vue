@@ -16,9 +16,38 @@ const userMsgOk = ref('')
 const generatedPassword = ref('')
 const resetUsername = ref('')
 const resetResultVisible = ref(false)
+const syncingUserIds = ref(new Set())
 
 async function loadUsers() {
   users.value = await apiGet('/api/admin/users')
+}
+
+/**
+ * 从母库为指定用户补齐缺词，保留已有学习记录并刷新该行单词数。
+ * @param {object} u 用户管理列表中的目标用户。
+ * @returns {Promise<void>} 完成同步或取消确认，失败时显示错误提示。
+ */
+async function syncAllWords(u) {
+  if (syncingUserIds.value.has(u.id)) return
+  syncingUserIds.value.add(u.id)
+  try {
+    try {
+      await ElMessageBox.confirm(
+        `将母库所有单词同步给用户「${u.username}」。新增单词的次数均为 1 次，已有单词的次数和学习记录保留。`,
+        '同步所有单词',
+        { confirmButtonText: '同步', cancelButtonText: '取消', type: 'info' },
+      )
+    } catch {
+      return
+    }
+    const data = await apiPost(`/api/admin/users/${u.id}/sync-words`)
+    u.word_count = data.word_count
+    ElMessage.success(`已为用户「${u.username}」同步，新增 ${data.added_count} 个单词`)
+  } catch (e) {
+    ElMessage.error(e.message || '同步失败，请重试')
+  } finally {
+    syncingUserIds.value.delete(u.id)
+  }
 }
 
 async function resetPassword(u) {
@@ -136,11 +165,14 @@ onMounted(loadUsers)
             <td class="nowrap">{{ formatTime(u.last_login_at, '从未登录') }}</td>
             <td>{{ u.word_count }}</td>
             <td class="op-col">
+              <button class="link-btn" :disabled="syncingUserIds.has(u.id)" @click="syncAllWords(u)">
+                {{ syncingUserIds.has(u.id) ? '同步中…' : '同步所有单词' }}
+              </button>
               <button class="link-btn" @click="resetPassword(u)">重置密码</button>
               <button class="link-btn" :disabled="u.id === currentUserId" @click="toggleDisabled(u)">
                 {{ u.disabled ? '启用' : '禁用' }}
               </button>
-              <button class="link-btn danger" :disabled="u.id === currentUserId" @click="deleteUser(u)">删除</button>
+              <button class="link-btn danger" :disabled="u.id === currentUserId || syncingUserIds.has(u.id)" @click="deleteUser(u)">删除</button>
             </td>
           </tr>
         </tbody>

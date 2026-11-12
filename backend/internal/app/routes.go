@@ -43,6 +43,7 @@ func (a *App) Handler(staticDir string) http.Handler {
 
 	mux.HandleFunc("POST /api/admin/users", withTimeout(defaultRequestTimeout)(a.requireAdmin(a.handleCreateUser)))
 	mux.HandleFunc("GET /api/admin/users", withTimeout(defaultRequestTimeout)(a.requireAdmin(a.handleListUsers)))
+	mux.HandleFunc("POST /api/admin/users/{id}/sync-words", withTimeout(exportRequestTimeout)(a.requireAdmin(a.handleSyncUserWords)))
 	mux.HandleFunc("POST /api/admin/users/{id}/reset-password", withTimeout(defaultRequestTimeout)(a.requireAdmin(a.handleResetUserPassword)))
 	mux.HandleFunc("POST /api/admin/users/{id}/disable", withTimeout(defaultRequestTimeout)(a.requireAdmin(a.handleDisableUser)))
 	mux.HandleFunc("DELETE /api/admin/users/{id}", withTimeout(defaultRequestTimeout)(a.requireAdmin(a.handleDeleteUser)))
