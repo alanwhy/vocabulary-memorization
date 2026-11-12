@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"time"
+	"vocab-backend/internal/billing"
 
 	"vocab-backend/internal/model"
 )
@@ -20,8 +21,8 @@ func NewUserRepository(db *sql.DB) *UserRepository {
 
 func (r *UserRepository) Insert(ctx context.Context, username, passwordHash string, isAdmin bool, now time.Time) (model.User, error) {
 	res, err := r.db.ExecContext(ctx,
-		`INSERT INTO users (username, password_hash, is_admin, created_at) VALUES (?, ?, ?, ?)`,
-		username, passwordHash, isAdmin, now,
+		`INSERT INTO users (username, password_hash, is_admin, created_at, daily_ai_limit_nano) VALUES (?, ?, ?, ?, ?)`,
+		username, passwordHash, isAdmin, now, defaultAILimit(isAdmin),
 	)
 	if err != nil {
 		return model.User{}, err
@@ -125,4 +126,60 @@ func nullTimePtr(value sql.NullTime) *time.Time {
 	}
 	t := value.Time
 	return &t
+}
+
+// defaultAILimit 新普通用户每天五元，管理员默认不限额。
+func defaultAILimit(admin bool) any {
+	if admin {
+		return nil
+	}
+	return billing.DefaultLimit
+}
+
+// FindByID 返回账号详情及含归档的单词统计；不存在时返回 sql.ErrNoRows。
+func (r *UserRepository) FindByID(ctx context.Context, id int) (model.UserWithStats, error) {
+	var u model.UserWithStats
+	var login sql.NullTime
+	err := r.db.QueryRowContext(ctx, `SELECT u.id,u.username,u.is_admin,u.disabled,u.created_at,u.last_login_at,(SELECT COUNT(*) FROM words WHERE user_id=u.id) FROM users u WHERE u.id=?`, id).Scan(&u.ID, &u.Username, &u.IsAdmin, &u.Disabled, &u.CreatedAt, &login, &u.WordCount)
+	u.LastLoginAt = nullTimePtr(login)
+	return u, err
+}
+
+// UpdateProfile 原子更新账号及额度，锁管理员集合防止并发取消最后一个可用管理员。
+func (r *UserRepository) UpdateProfile(ctx context.Context, id int, username string, admin, disabled bool, limit *int64) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	rows, err := tx.QueryContext(ctx, `SELECT id FROM users WHERE is_admin=1 AND disabled=0 ORDER BY id FOR UPDATE`)
+	if err != nil {
+		return err
+	}
+	admins := []int{}
+	for rows.Next() {
+		var n int
+		if err = rows.Scan(&n); err != nil {
+			rows.Close()
+			return err
+		}
+		admins = append(admins, n)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	var wasAdmin, wasDisabled bool
+	if err = tx.QueryRowContext(ctx, `SELECT is_admin,disabled FROM users WHERE id=? FOR UPDATE`, id).Scan(&wasAdmin, &wasDisabled); err != nil {
+		return err
+	}
+	if wasAdmin && !wasDisabled && (!admin || disabled) && len(admins) <= 1 {
+		return billing.ErrLastAdmin
+	}
+	_, err = tx.ExecContext(ctx, `UPDATE users SET username=?,is_admin=?,disabled=?,daily_ai_limit_nano=? WHERE id=?`, username, admin, disabled, limit, id)
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
 }

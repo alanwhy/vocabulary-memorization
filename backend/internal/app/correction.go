@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+	"vocab-backend/internal/billing"
 )
 
 // lockWordLookup 对同词请求串行化，等待可取消；锁只保护模型查询及缓存写回。
@@ -125,7 +126,10 @@ func (a *App) handleCorrectWord(w http.ResponseWriter, r *http.Request) {
 	}
 	defer unlock()
 	// 纠错永不复用缓存；反馈只用于核对，必须得到完整的新释义才允许覆盖。
-	result := translateWord(r.Context(), wd.WordKey, a.getDeepSeekConfig(), reason)
+	result := translateWord(billing.WithOwner(r.Context(), currentUser(r).ID, "correction"), wd.WordKey, a.getDeepSeekConfig(), reason)
+	if writeAIError(w, result.Err) {
+		return
+	}
 	if result.IsSpellingError {
 		writeError(w, http.StatusUnprocessableEntity, "单词拼写可能有误，请检查")
 		return

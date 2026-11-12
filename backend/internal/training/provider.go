@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"vocab-backend/internal/billing"
 )
 
 type Provider struct {
@@ -15,6 +16,7 @@ type Provider struct {
 	BaseURL string
 	APIKey  string
 	Model   string
+	Billing *billing.Service
 }
 type ProviderError struct {
 	Status    int
@@ -26,20 +28,23 @@ func (e *ProviderError) Error() string { return "出题服务暂时无法完成�
 
 // NewProvider creates a dedicated bounded client without changing the dictionary client.
 func NewProvider(base, key, name string, timeout time.Duration) *Provider {
-	return &Provider{&http.Client{Timeout: timeout}, strings.TrimRight(base, "/"), key, name}
+	return &Provider{Client: &http.Client{Timeout: timeout}, BaseURL: strings.TrimRight(base, "/"), APIKey: key, Model: name}
 }
 
 // Call performs one generation/review request; the worker owns retries and durable request accounting.
 func (p *Provider) Call(ctx context.Context, system, data string) (string, modelUsage, error) {
-	payload, _ := json.Marshal(map[string]any{"model": p.Model, "temperature": 0, "messages": []map[string]string{{"role": "system", "content": system}, {"role": "user", "content": data}}})
+	payload, _ := json.Marshal(map[string]any{"model": p.Model, "temperature": 0, "max_tokens": billing.MaxOutputTokens, "thinking": map[string]string{"type": "disabled"}, "messages": []map[string]string{{"role": "system", "content": system}, {"role": "user", "content": data}}})
 	req, err := http.NewRequestWithContext(ctx, "POST", p.BaseURL+"/chat/completions", bytes.NewReader(payload))
 	if err != nil {
 		return "", modelUsage{}, err
 	}
 	req.Header.Set("Authorization", "Bearer "+p.APIKey)
 	req.Header.Set("Content-Type", "application/json")
-	res, err := p.Client.Do(req)
+	res, err := p.Billing.Do(p.Client, req, p.BaseURL, p.Model)
 	if err != nil {
+		if billing.Terminal(err) {
+			return "", modelUsage{}, err
+		}
 		return "", modelUsage{}, &ProviderError{Retryable: true}
 	}
 	defer res.Body.Close()

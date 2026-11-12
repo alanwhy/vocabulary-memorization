@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"vocab-backend/internal/billing"
 
 	mysqldriver "github.com/go-sql-driver/mysql"
 )
@@ -214,9 +215,22 @@ func (a *App) translateAndSave(ctx context.Context, wordID int, wordKey string) 
 		log.Printf("标记查词开始时间失败 word=%s id=%d: %v", wordKey, wordID, err)
 	}
 
+	if a.billing != nil {
+		owner, ownerErr := a.billing.Store.WordOwner(ctx, wordID)
+		if ownerErr != nil {
+			return
+		}
+		ctx = billing.WithOwner(ctx, owner, "word_lookup")
+	}
 	for attempt := 0; ; attempt++ {
 		cfg := a.getDeepSeekConfig()
 		result := translateWord(ctx, wordKey, cfg)
+		if billing.Terminal(result.Err) {
+			if !sensesNeedEnrichment(previous) {
+				completed = a.saveWordSenses(ctx, wordID, wordKey, []Sense{{Pos: "error", Translation: result.Err.Error()}}) == nil
+			}
+			return
+		}
 		if result.IsSpellingError {
 			// 拼写错误不是重试能解决的，直接写回拼写错误占位，不进入重试循环
 			if !sensesNeedEnrichment(previous) {

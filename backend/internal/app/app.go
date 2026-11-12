@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"vocab-backend/internal/billing"
 	"vocab-backend/internal/model"
 	"vocab-backend/internal/training"
 )
@@ -97,6 +98,7 @@ type Dependencies struct {
 	Words      WordStore
 	Dictionary DictionaryStore
 	Settings   SettingsStore
+	Billing    billing.Store
 }
 
 // App 持有所有 repository 和运行期状态，取代原先裸露的全局变量；
@@ -108,6 +110,7 @@ type App struct {
 	dict     DictionaryStore
 	settings SettingsStore
 	daily    *training.DailyManager
+	billing  *billing.Service
 
 	cfg Config
 
@@ -137,6 +140,10 @@ type App struct {
 // New 创建应用实例并初始化共享后台任务上下文；具体 repository 由组合根负责创建。
 func New(deps Dependencies, cfg Config) *App {
 	bgCtx, bgCancel := context.WithCancel(context.Background())
+	var accounting *billing.Service
+	if deps.Billing != nil {
+		accounting = billing.New(deps.Billing)
+	}
 	maxConcurrentTranslations := getEnvInt("MAX_CONCURRENT_TRANSLATIONS", 5)
 	return &App{
 		users:        deps.Users,
@@ -144,6 +151,7 @@ func New(deps Dependencies, cfg Config) *App {
 		words:        deps.Words,
 		dict:         deps.Dictionary,
 		settings:     deps.Settings,
+		billing:      accounting,
 		cfg:          cfg,
 		loginLimiter: newAttemptTracker(15*time.Minute, 5, 15*time.Minute),
 		pwLimiter:    newAttemptTracker(15*time.Minute, 5, 15*time.Minute),

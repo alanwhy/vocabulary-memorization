@@ -21,6 +21,8 @@ type deepseekChatRequest struct {
 	Model       string            `json:"model"`
 	Messages    []deepseekMessage `json:"messages"`
 	Temperature float64           `json:"temperature"`
+	MaxTokens   int               `json:"max_tokens"`
+	Thinking    map[string]string `json:"thinking"`
 }
 
 type deepseekChatResponse struct {
@@ -66,6 +68,8 @@ func lookupDeepSeek(ctx context.Context, word string, cfg deepseekConfig, reason
 		Model:       cfg.FallbackModel,
 		Messages:    []deepseekMessage{{Role: "user", Content: prompt}},
 		Temperature: 0,
+		MaxTokens:   4096,
+		Thinking:    map[string]string{"type": "disabled"},
 	}
 	payload, err := json.Marshal(reqBody)
 	if err != nil {
@@ -79,7 +83,7 @@ func lookupDeepSeek(ctx context.Context, word string, cfg deepseekConfig, reason
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
 
-	resp, err := deepseekHTTPClient.Do(req)
+	resp, err := cfg.Accounting.Do(deepseekHTTPClient, req, cfg.BaseURL, cfg.FallbackModel)
 	if err != nil {
 		return nil, false, err
 	}

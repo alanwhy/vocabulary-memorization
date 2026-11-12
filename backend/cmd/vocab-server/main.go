@@ -33,6 +33,7 @@ func main() {
 		Words:      storage.NewWordRepository(db),
 		Dictionary: storage.NewDictionaryRepository(db),
 		Settings:   storage.NewSettingsRepository(db),
+		Billing:    storage.NewBillingRepository(db),
 	}, app.Config{CookieSecure: getEnvBool("COOKIE_SECURE", false)})
 
 	adminID := application.BootstrapAdmin()

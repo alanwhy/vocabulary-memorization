@@ -20,6 +20,7 @@ func (a *App) Handler(staticDir string) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/login", withTimeout(defaultRequestTimeout)(a.handleLogin))
 	mux.HandleFunc("POST /api/logout", withTimeout(defaultRequestTimeout)(a.handleLogout))
+	mux.HandleFunc("GET /api/me/ai-budget", withTimeout(defaultRequestTimeout)(a.requireAuth(a.handleAIBudget)))
 	mux.HandleFunc("GET /api/me", withTimeout(defaultRequestTimeout)(a.requireAuth(a.handleMe)))
 	mux.HandleFunc("PUT /api/me/password", withTimeout(defaultRequestTimeout)(a.requireAuth(a.handleChangePassword)))
 	mux.HandleFunc("POST /api/me/sync-words", withTimeout(defaultRequestTimeout)(a.requireAuth(a.handleStartWordSync)))
@@ -45,6 +46,8 @@ func (a *App) Handler(staticDir string) http.Handler {
 
 	mux.HandleFunc("POST /api/admin/users", withTimeout(defaultRequestTimeout)(a.requireAdmin(a.handleCreateUser)))
 	mux.HandleFunc("GET /api/admin/users", withTimeout(defaultRequestTimeout)(a.requireAdmin(a.handleListUsers)))
+	mux.HandleFunc("GET /api/admin/users/{id}", withTimeout(defaultRequestTimeout)(a.requireAdmin(a.handleUserDetail)))
+	mux.HandleFunc("PUT /api/admin/users/{id}", withTimeout(defaultRequestTimeout)(a.requireAdmin(a.handleEditUser)))
 	// 旧代用户同步接口已撤销，明确返回 404，避免进入 SPA fallback。
 	mux.HandleFunc("POST /api/admin/users/{id}/sync-words", http.NotFound)
 	mux.HandleFunc("POST /api/admin/users/{id}/reset-password", withTimeout(defaultRequestTimeout)(a.requireAdmin(a.handleResetUserPassword)))

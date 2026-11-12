@@ -9,6 +9,7 @@ import (
 	"sort"
 	"sync"
 	"time"
+	"vocab-backend/internal/billing"
 	"vocab-backend/internal/model"
 )
 
@@ -246,7 +247,7 @@ func (m *DailyManager) generateSlot(user int, u *dailyUser, round *dailyRound, s
 	alive := err == nil && len(words) == 1 && !words[0].Archived
 	var bundle model.TrainingBundle
 	if alive {
-		bundle, err = m.generate(ctx, words[0])
+		bundle, err = m.generate(billing.WithOwner(ctx, user, "training"), words[0])
 	} else if err == nil {
 		err = Fail(409, "word_archived", "单词已归档或删除")
 	}

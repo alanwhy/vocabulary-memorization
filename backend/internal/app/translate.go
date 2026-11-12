@@ -12,6 +12,7 @@ type translateResult struct {
 	Senses          []Sense
 	Source          string // "deepseek" / "none" 均未获取到
 	IsSpellingError bool
+	Err             error
 }
 
 // translateWord 调用 DeepSeek 兜底模型查词。查词失败不阻塞记录单词本身（调用方仍会
@@ -20,7 +21,7 @@ func translateWord(ctx context.Context, wordKey string, cfg deepseekConfig, reas
 	senses, isSpellingError, err := lookupDeepSeek(ctx, wordKey, cfg, reason...)
 	if err != nil {
 		log.Printf("deepseek 查词失败 word=%s err=%v", wordKey, err)
-		return translateResult{Senses: nil, Source: "none"}
+		return translateResult{Senses: nil, Source: "none", Err: err}
 	}
 	if isSpellingError {
 		return translateResult{Senses: nil, Source: "deepseek", IsSpellingError: true}

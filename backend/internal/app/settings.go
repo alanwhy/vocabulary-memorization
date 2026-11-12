@@ -8,16 +8,18 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"vocab-backend/internal/billing"
 )
 
 // deepseekConfig DeepSeek 查词的配置，可在后台动态修改。
 // FallbackModel 是当前实际用于查词的模型；ThinkingModel 本期仅做配置存储，尚未接入查词链路。
 type deepseekConfig struct {
-	APIKey        string `json:"api_key"`
-	BaseURL       string `json:"base_url"`
-	FallbackModel string `json:"fallback_model"`
-	ThinkingModel string `json:"thinking_model"`
-	Enabled       bool   `json:"enabled"`
+	APIKey        string           `json:"api_key"`
+	BaseURL       string           `json:"base_url"`
+	FallbackModel string           `json:"fallback_model"`
+	ThinkingModel string           `json:"thinking_model"`
+	Enabled       bool             `json:"enabled"`
+	Accounting    *billing.Service `json:"-"`
 }
 
 // ttsConfig 豆包（火山引擎）语音合成的配置，可在后台动态修改。
@@ -153,7 +155,9 @@ func (a *App) refreshSettingsCache(ctx context.Context) {
 func (a *App) getDeepSeekConfig() deepseekConfig {
 	a.settingsMu.RLock()
 	defer a.settingsMu.RUnlock()
-	return a.dsConfig
+	cfg := a.dsConfig
+	cfg.Accounting = a.billing
+	return cfg
 }
 
 func (a *App) getTTSConfig() ttsConfig {

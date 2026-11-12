@@ -42,9 +42,9 @@ func (p *Provider) toolJSON(ctx context.Context, tool string, input any, dst any
 	}
 	req.Header.Set("Authorization", "Bearer "+p.APIKey)
 	req.Header.Set("Content-Type", "application/json")
-	response, err := p.Client.Do(req)
+	response, err := p.Billing.Do(p.Client, req, p.BaseURL, p.Model)
 	if err != nil {
-		return &ProviderError{Retryable: true}
+		return err
 	}
 	defer response.Body.Close()
 	if response.StatusCode != 200 {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"time"
+	"vocab-backend/internal/billing"
 	"vocab-backend/internal/model"
 	"vocab-backend/internal/training"
 )
@@ -24,10 +25,20 @@ func (a *App) generateDailyWord(parent context.Context, word model.Word) (model.
 	if !cfg.Enabled || cfg.APIKey == "" || cfg.BaseURL == "" || cfg.FallbackModel == "" {
 		return model.TrainingBundle{}, training.Fail(503, "generation_disabled", "请先在后台启用并配置 DeepSeek。")
 	}
+	workflowCtx, release, budgetErr := a.billing.BeginTraining(ctx, cfg.BaseURL, cfg.FallbackModel)
+	if budgetErr != nil {
+		return model.TrainingBundle{}, trainingBudgetError(budgetErr)
+	}
+	defer release()
+	ctx = workflowCtx
 	provider := training.NewProvider(cfg.BaseURL, cfg.APIKey, cfg.FallbackModel, 45*time.Second)
+	provider.Billing = a.billing
 	searchCtx, searchCancel := context.WithTimeout(ctx, 15*time.Second)
 	sources, searchErr := provider.SearchExam(searchCtx, word.WordKey)
 	searchCancel()
+	if billing.Terminal(searchErr) {
+		return model.TrainingBundle{}, trainingBudgetError(searchErr)
+	}
 	senses := []model.Sense{}
 	for _, s := range word.Senses {
 		if s.Pos != "error" && s.Pos != "系统提示" {
@@ -38,6 +49,9 @@ func (a *App) generateDailyWord(parent context.Context, word model.Word) (model.
 	data, _ := json.Marshal(map[string]any{"seed": seed, "exam_sources": training.SourceContext(sources, word.WordKey)})
 	text, _, err := provider.Call(ctx, training.GeneratePrompt, string(data))
 	if err != nil {
+		if billing.Terminal(err) {
+			return model.TrainingBundle{}, trainingBudgetError(err)
+		}
 		return model.TrainingBundle{}, training.Fail(502, "generation_failed", "DeepSeek 暂未生成成功，请重试本词。")
 	}
 	var b model.TrainingBundle
@@ -53,6 +67,9 @@ func (a *App) generateDailyWord(parent context.Context, word model.Word) (model.
 	q := &b.Questions[0]
 	reviewText, _, err := provider.Call(ctx, training.ReviewPrompt, training.ReviewData(*q))
 	if err != nil {
+		if billing.Terminal(err) {
+			return b, trainingBudgetError(err)
+		}
 		return b, training.Fail(502, "review_failed", "题目复核暂未完成，请重试本词。")
 	}
 	var review model.TrainingReview
@@ -70,4 +87,12 @@ func (a *App) generateDailyWord(parent context.Context, word model.Word) (model.
 		b.SearchStatus = "found"
 	}
 	return b, nil
+}
+
+// trainingBudgetError 让内存练习队列保留明确额度提示，不把配额不足伪装成出题失败。
+func trainingBudgetError(err error) error {
+	if err == billing.ErrExceeded {
+		return training.Fail(429, "ai_budget_exceeded", err.Error())
+	}
+	return training.Fail(503, "ai_billing_unavailable", billing.ErrUnavailable.Error())
 }

@@ -52,6 +52,7 @@ func Migrate(db *sql.DB) {
 	migrateWordsImportantGlossesColumn(db)
 	migrateUsersLastLoginColumn(db)
 	migrateUsersDisabledColumn(db)
+	migrateAIBilling(db)
 	mergeHistoricalWordSenses(db)
 	backfillWordDictionary(db)
 	migrateTimestampsToCST(db)
@@ -315,4 +316,46 @@ func mustExec(db *sql.DB, query string) {
 	if _, err := db.Exec(query); err != nil {
 		log.Fatalf("数据库迁移失败: %v\nSQL: %s", err, query)
 	}
+}
+
+// migrateAIBilling 补齐持久账本，只在首次加额度列时设置历史账号默认值。
+func migrateAIBilling(db *sql.DB) {
+	if !columnExists(db, "users", "daily_ai_limit_nano") {
+		mustExec(db, `ALTER TABLE users ADD COLUMN daily_ai_limit_nano BIGINT NULL DEFAULT 5000000000`)
+
+	}
+	var initialized int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM settings WHERE name='ai_billing_limits_initialized'`).Scan(&initialized); err != nil {
+		log.Fatalf("读取 AI 额度迁移状态失败: %v", err)
+	}
+	if initialized == 0 {
+		tx, err := db.Begin()
+		if err != nil {
+			log.Fatalf("初始化 AI 额度失败: %v", err)
+		}
+		if _, err = tx.Exec(`UPDATE users SET daily_ai_limit_nano=NULL WHERE is_admin=1`); err != nil {
+			tx.Rollback()
+			log.Fatalf("初始化管理员额度失败: %v", err)
+		}
+		if _, err = tx.Exec(`INSERT INTO settings(name,value) VALUES ('ai_billing_limits_initialized','1')`); err != nil {
+			tx.Rollback()
+			log.Fatalf("记录 AI 额度迁移失败: %v", err)
+		}
+		if err = tx.Commit(); err != nil {
+			log.Fatalf("提交 AI 额度迁移失败: %v", err)
+		}
+	}
+	mustExec(db, `CREATE TABLE IF NOT EXISTS ai_daily_usage (
+  user_id INT NOT NULL, usage_date DATE NOT NULL,
+  spent_nano BIGINT NOT NULL DEFAULT 0, reserved_nano BIGINT NOT NULL DEFAULT 0,
+  PRIMARY KEY(user_id,usage_date)
+ ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+	mustExec(db, `CREATE TABLE IF NOT EXISTS ai_requests (
+  request_id VARCHAR(32) PRIMARY KEY, parent_id VARCHAR(32) NOT NULL DEFAULT '',
+  user_id INT NOT NULL, usage_date DATE NOT NULL, purpose VARCHAR(64) NOT NULL,
+  provider VARCHAR(512) NOT NULL, model VARCHAR(128) NOT NULL,
+  reserved_nano BIGINT NOT NULL, actual_nano BIGINT NULL, state VARCHAR(16) NOT NULL,
+  details JSON NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  KEY idx_ai_user_day(user_id,usage_date,state)
+ ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
 }
