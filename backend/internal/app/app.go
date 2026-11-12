@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"vocab-backend/internal/model"
+	"vocab-backend/internal/training"
 )
 
 // Config 收拢由组合根传入的运行时配置。
@@ -106,6 +107,7 @@ type App struct {
 	words    WordStore
 	dict     DictionaryStore
 	settings SettingsStore
+	daily    *training.DailyManager
 
 	cfg Config
 

@@ -58,6 +58,7 @@ func (a *App) Handler(staticDir string) http.Handler {
 	mux.HandleFunc("POST /api/admin/dictionary/batch-delete", withTimeout(defaultRequestTimeout)(a.requireAdmin(a.handleDeleteDictionaryBatch)))
 	mux.HandleFunc("POST /api/admin/dictionary/retry", withTimeout(dictionaryRetryTimeout)(a.requireAdmin(a.handleRetryDictionary)))
 
+	a.registerTrainingRoutes(mux)
 	mux.HandleFunc("/", spaHandler(staticDir))
 	return recoverMiddleware(mux)
 }

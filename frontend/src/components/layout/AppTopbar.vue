@@ -31,6 +31,7 @@ async function logout() {
     <span>
       <RouterLink v-if="route.path !== '/'" to="/">背单词</RouterLink>
       <RouterLink v-if="route.path !== '/flashcards'" to="/flashcards">闪卡</RouterLink>
+      <RouterLink v-if="route.path !== '/synonyms'" to="/synonyms">同义替换</RouterLink>
       <RouterLink v-if="route.path !== '/archive'" to="/archive">归档</RouterLink>
       <RouterLink v-if="route.path !== '/stats'" to="/stats">统计</RouterLink>
       <RouterLink v-if="auth.isAdmin && route.path !== '/admin'" to="/admin">后台管理</RouterLink>
@@ -40,6 +41,8 @@ async function logout() {
 </template>
 
 <style scoped>
+.topbar { flex-wrap: wrap; gap: 8px; }
+.topbar > span:last-child { display: flex; flex-wrap: wrap; gap: 6px; }
 /* 只留图标，padding 收窄成近似正方形，免得按钮比旁边的用户名还宽 */
 .theme-btn {
   padding: 4px 7px;

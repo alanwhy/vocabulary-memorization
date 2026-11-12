@@ -14,6 +14,7 @@ func (a *App) Initialize() error {
 	if err := ensureAudioDir(); err != nil {
 		return err
 	}
+	a.startDailyTraining()
 	a.resumeStuckTranslations()
 
 	go a.startStuckTranslationSweeper()
@@ -27,6 +28,9 @@ func (a *App) CancelBackground() {
 	a.wordSyncMu.Lock()
 	a.wordSyncStopping = true
 	a.wordSyncMu.Unlock()
+	if a.daily != nil {
+		a.daily.Close()
+	}
 	a.bgCancel()
 }
 
@@ -36,6 +40,9 @@ func (a *App) WaitBackground(timeout time.Duration) bool {
 	go func() {
 		a.translateWG.Wait()
 		a.wordSyncWG.Wait()
+		if a.daily != nil {
+			a.daily.Wait()
+		}
 		close(done)
 	}()
 

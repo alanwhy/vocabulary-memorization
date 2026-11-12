@@ -1,0 +1,33 @@
+/* 仅影响一词一题页面，复用现有主题，不采用翻面或复杂仪表盘。 */
+.daily-training { font-size: 14px; }
+.daily-training .daily-card, .daily-training .daily-empty { display: grid; gap: 18px; }
+.daily-training h2 { margin: 0; }
+.daily-training p { margin: 0; line-height: 1.75; overflow-wrap: anywhere; }
+.daily-training .daily-top { display: flex; justify-content: space-between; color: var(--muted); font-size: 12px; }
+.daily-training .daily-word { font-size: 27px; color: var(--text); font-weight: 600; }
+.daily-training .daily-stem { font-size: 18px; line-height: 1.85; }
+.daily-training .daily-choice { display: flex; gap: 6px; align-items: center; }
+.daily-training .daily-choice .daily-option { flex: 1; }
+.daily-training .daily-options { display: grid; gap: 10px; }
+.daily-training .daily-option { display: flex; align-items: flex-start; gap: 12px; width: 100%; padding: 12px 14px; font: inherit; line-height: 1.8; color: var(--text); background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; text-align: left; cursor: pointer; }
+.daily-training .daily-option:hover:not(:disabled) { border-color: var(--accent); background: var(--accent-soft); }
+.daily-training .daily-option.correct { border-color: var(--accent); background: var(--accent-soft); }
+.daily-training .daily-option.wrong { border-color: var(--danger); background: var(--danger-soft); }
+.daily-training .daily-option:disabled { cursor: default; }
+.daily-training .daily-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+.daily-training .daily-button { padding: 9px 16px; font: inherit; color: var(--text); background: var(--card-bg); border: 1px solid var(--border); border-radius: 7px; cursor: pointer; }
+.daily-training .daily-button.primary { background: var(--accent); color: white; border-color: var(--accent); }
+.daily-training .daily-button:disabled { opacity: .5; cursor: not-allowed; }
+.daily-training .daily-feedback { display: grid; gap: 8px; padding-top: 6px; }
+.daily-training .daily-pair { color: var(--accent); font-size: 17px; font-weight: 600; }
+.daily-training .daily-muted { color: var(--muted); font-size: 12px; }
+.daily-training .daily-exam { font-size: 12px; color: var(--accent); text-decoration: none; white-space: nowrap; }
+.daily-training .daily-error { color: var(--danger); margin-bottom: 14px; }
+.daily-training .daily-link { border: 0; padding: 0; background: none; color: var(--accent); font: inherit; cursor: pointer; }
+.daily-training .daily-empty { text-align: center; padding: 32px 20px; justify-items: center; }
+.daily-training .daily-empty a { color: var(--accent); }
+.daily-training .daily-footer { text-align: center; margin-top: 22px; color: var(--muted); font-size: 12px; }
+@media (max-width: 480px) { .daily-training .daily-card { padding: 16px; } .daily-training .daily-stem { font-size: 16px; } .daily-training .daily-button { min-height: 44px; } }
+
+.daily-training .daily-choice .daily-option { min-width: 0; }
+.daily-training .daily-option span { min-width: 0; overflow-wrap: anywhere; }
