@@ -1,11 +1,11 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import { formatTime } from '@/utils/format'
 import { countBadgeClass, reviewColorStyle } from '@/utils/reviewLevel'
 import { useReviewColors } from '@/composables/useReviewColors'
 import { useVocabularyIndex } from '@/composables/useVocabularyIndex'
 import { useWordLookup } from '@/composables/useWordLookup'
-import { speakWord } from '@/composables/usePronunciation'
+import { speakWord, speakExample, stopSpeech, isSpeechLoading } from '@/composables/usePronunciation'
 import { tokenizeExample, splitWordRef } from '@/utils/highlight'
 import WordCorrectionButton from './WordCorrectionButton.vue'
 import { splitGlosses } from '@/utils/gloss'
@@ -16,6 +16,10 @@ const props = defineProps({
 })
 const emit = defineEmits(['archive', 'unarchive', 'delete', 'retry', 'set-important', 'corrected'])
 const correcting = ref(false)
+const speechSource = computed(() => `word-card:${props.word.id}`)
+watch(speechSource, (_, previous) => stopSpeech(previous))
+watch(() => props.word.word_key, () => stopSpeech(speechSource.value))
+onBeforeUnmount(() => stopSpeech(speechSource.value))
 
 const vocab = useVocabularyIndex()
 const lookup = useWordLookup()
@@ -99,7 +103,7 @@ function openLookup(e, word) {
           type="button"
           class="speak-btn"
           :aria-label="`朗读 ${word.display_word}`"
-          @click="speakWord(word.word_key)"
+          @click="speakWord(word.word_key, { sourceId: speechSource })"
         >
           🔊
         </button>
@@ -132,7 +136,7 @@ function openLookup(e, word) {
             </template>
           </span>
           <span class="example" v-if="s.example || s.example_translation">
-            <span class="example-en" v-if="s.example">
+            <span class="example-en" v-if="s.example?.trim()">
               <span
                 v-for="(t, i) in exampleTokens(s)"
                 :key="i"
@@ -140,6 +144,10 @@ function openLookup(e, word) {
                 :style="t.count ? reviewColorStyle(t.count, reviewColors) : undefined"
                 @click="onTokenClick($event, t)"
               >{{ t.text }}</span>
+              <button type="button" class="speak-btn example-speak" aria-label="朗读例句"
+                :disabled="isSpeechLoading(`example:${s.example.trim()}`, speechSource)"
+                @click.stop="speakExample(s.example, { sourceId: speechSource })"
+              >{{ isSpeechLoading(`example:${s.example.trim()}`, speechSource) ? '…' : '🔊' }}</button>
             </span>
             <span class="example-trans" v-if="s.example_translation">{{ s.example_translation }}</span>
           </span>
@@ -186,6 +194,8 @@ function openLookup(e, word) {
 </template>
 
 <style scoped>
+.example-speak { margin-left: 6px; font-size: 13px; vertical-align: baseline; }
+.example-speak:disabled { cursor: wait; opacity: 0.5; }
 .word-card {
   background: var(--card-bg);
   border: 1px solid var(--border);

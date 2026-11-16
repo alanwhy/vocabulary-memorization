@@ -11,7 +11,7 @@ const (
 // Initialize 按原启动顺序加载配置、准备音频目录、恢复未完成任务，再启动后台清理循环。
 func (a *App) Initialize() error {
 	a.loadSettings()
-	if err := ensureAudioDir(); err != nil {
+	if err := a.ensureAudioDir(); err != nil {
 		return err
 	}
 	a.startDailyTraining()
@@ -25,6 +25,9 @@ func (a *App) Initialize() error {
 
 // CancelBackground 先取消后台查词、重试等待和清理循环；HTTP Shutdown 应由组合根随后执行。
 func (a *App) CancelBackground() {
+	a.ttsMu.Lock()
+	a.ttsStopping = true
+	a.ttsMu.Unlock()
 	a.wordSyncMu.Lock()
 	a.wordSyncStopping = true
 	a.wordSyncMu.Unlock()
@@ -39,6 +42,7 @@ func (a *App) WaitBackground(timeout time.Duration) bool {
 	done := make(chan struct{})
 	go func() {
 		a.translateWG.Wait()
+		a.ttsWG.Wait()
 		a.wordSyncWG.Wait()
 		if a.daily != nil {
 			a.daily.Wait()

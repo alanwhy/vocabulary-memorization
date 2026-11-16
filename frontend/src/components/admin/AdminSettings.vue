@@ -8,9 +8,7 @@ const form = reactive({
   base_url: '',
   fallback_model: '',
   thinking_model: '',
-  tts_api_key: '',
-  tts_cluster: '',
-  tts_voice_type: '',
+  tts_voice_id: 'stella',
   start_color: '#e4f7e9',
   end_color: '#a11d1d',
   segments: 6,
@@ -93,17 +91,17 @@ onMounted(loadSettings)
   <section class="settings-section">
     <div class="section-heading">
       <div>
-        <h2>豆包语音</h2>
-        <p>用于单词读音的语音合成服务。</p>
+        <h2>DeepSeek 语音</h2>
+        <p>共用上方 DeepSeek API Key 和 Base URL。单词音频保存复用，例句按需朗读。</p>
       </div>
     </div>
     <div class="card settings-card">
-    <label>API Key</label>
-    <input type="password" v-model="form.tts_api_key" placeholder="BytePlus Seed Speech 的 API Key" />
-    <label>Cluster（集群）</label>
-    <input type="text" v-model="form.tts_cluster" placeholder="volcano_tts" />
-    <label>音色 VoiceType</label>
-    <input type="text" v-model="form.tts_voice_type" placeholder="BV001 或 BV002" />
+    <label for="ttsVoice">朗读音色</label>
+    <select id="ttsVoice" v-model="form.tts_voice_id">
+      <option value="stella">海星 · 女声</option>
+      <option value="tide">暗潮 · 男声</option>
+    </select>
+    <p class="voice-note">更换音色仅影响新生成的音频，已有单词读音继续使用。</p>
       <div class="section-actions">
         <button class="primary" :disabled="!!savingSection" @click="saveSettings('tts')">
           {{ savingSection === 'tts' ? '保存中…' : '保存语音设置' }}
@@ -157,6 +155,8 @@ onMounted(loadSettings)
 </template>
 
 <style scoped>
+.voice-note { margin: 4px 0; color: var(--muted); font-size: 13px; }
+.settings-card select { width: 100%; padding: 8px; border: 1px solid var(--border); border-radius: 6px; color: var(--text); background: var(--card-bg); }
 .settings-section { margin: 28px 0; }
 .section-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin: 0 4px 10px; }
 .section-heading h2 { margin: 0; font-size: 17px; letter-spacing: -0.2px; }

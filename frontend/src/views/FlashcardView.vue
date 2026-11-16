@@ -5,12 +5,13 @@ import { useVocabularyIndex } from '@/composables/useVocabularyIndex'
 import { useWordLookup } from '@/composables/useWordLookup'
 import { useReviewColors } from '@/composables/useReviewColors'
 import { useFlashcardQueue } from '@/composables/useFlashcardQueue'
-import { speakWord } from '@/composables/usePronunciation'
+import { speakWord, speakExample, stopSpeech, isSpeechLoading } from '@/composables/usePronunciation'
 import { tokenizeExample, splitWordRef } from '@/utils/highlight'
 import { countBadgeClass, reviewColorStyle } from '@/utils/reviewLevel'
 import WordCorrectionButton from '@/components/word/WordCorrectionButton.vue'
 import { splitGlosses } from '@/utils/gloss'
 
+const speechSource = 'flashcard'
 const vocab = useVocabularyIndex()
 const lookup = useWordLookup()
 const { reviewColors, ensureReviewColors } = useReviewColors()
@@ -38,7 +39,7 @@ const {
 const firstSense = computed(() => (current.value?.senses && current.value.senses[0]) || {})
 const phonetic = computed(() => firstSense.value.phonetic || '')
 // 单词面例句：取第一条含英文例句的词性，仅展示英文原文（不含中文释义）
-const frontExample = computed(() => (current.value?.senses || []).find((s) => s.example) || null)
+const frontExample = computed(() => (current.value?.senses || []).find((s) => s.example?.trim()) || null)
 const rootAffix = computed(() => {
   const parts = [firstSense.value.root, firstSense.value.affix].filter(Boolean)
   return parts.join(' + ') // 只返回词根词缀内容，「词根词缀：」标题由模板统一渲染
@@ -125,9 +126,10 @@ const resultGroups = computed(() =>
   })),
 )
 
-// 每次展示新卡片（加载/切换到下一张）时自动朗读一次，翻面不重复触发
-watch(() => current.value?.id, () => {
-  if (current.value) speakWord(current.value.word_key)
+// 新卡片或纠错后的新词键自动朗读一次；翻面及普通内容补全不重复触发
+watch(() => current.value ? `${current.value.id}:${current.value.word_key}` : '', () => {
+  stopSpeech(speechSource)
+  if (current.value) speakWord(current.value.word_key, { sourceId: speechSource, automatic: true })
 })
 const correcting = ref(false)
 
@@ -151,12 +153,13 @@ function onShortcut(event) {
   event.preventDefault()
   if (event.repeat || submitting.value || correcting.value) return
   if (key === ' ') flip()
-  else if (key === 'v') speakWord(current.value.word_key)
+  else if (key === 'v') speakWord(current.value.word_key, { sourceId: speechSource })
   else if (!current.value.translating) rate(rating.key)
 }
 
 let contentTimer
 onBeforeUnmount(() => {
+  stopSpeech(speechSource)
   clearInterval(contentTimer)
   window.removeEventListener('keydown', onShortcut, true)
 })
@@ -208,7 +211,7 @@ onMounted(() => {
               <strong>{{ word.displayWord }}</strong>
               <span class="result-pronunciation">
                 <span v-if="word.phonetic" class="phonetic">{{ word.phonetic }}</span>
-                <button type="button" class="speak-btn" :aria-label="`朗读 ${word.displayWord}`" @click="speakWord(word.wordKey)">🔊</button>
+                <button type="button" class="speak-btn" :aria-label="`朗读 ${word.displayWord}`" @click="speakWord(word.wordKey, { sourceId: speechSource })">🔊</button>
               </span>
             </div>
             <p>{{ word.translation || '暂无释义' }}</p>
@@ -238,7 +241,7 @@ onMounted(() => {
                 type="button"
                 class="speak-btn"
                 :aria-label="`朗读 ${current.display_word}`"
-                @click.stop="speakWord(current.word_key)"
+                @click.stop="speakWord(current.word_key, { sourceId: speechSource })"
               >
                 🔊
               </button>
@@ -251,6 +254,10 @@ onMounted(() => {
                 :style="t.count ? reviewColorStyle(t.count, reviewColors) : undefined"
                 @click="onTokenClick($event, t)"
               >{{ t.text }}</span>
+              <button type="button" class="speak-btn example-speak" aria-label="朗读例句"
+                :disabled="isSpeechLoading(`example:${frontExample.example.trim()}`, speechSource)"
+                @click.stop="speakExample(frontExample.example, { sourceId: speechSource })"
+              >{{ isSpeechLoading(`example:${frontExample.example.trim()}`, speechSource) ? '…' : '🔊' }}</button>
             </span>
             <span class="hint">点击或按空格翻面看释义</span>
           </div>
@@ -262,7 +269,7 @@ onMounted(() => {
                 type="button"
                 class="speak-btn"
                 :aria-label="`朗读 ${current.display_word}`"
-                @click.stop="speakWord(current.word_key)"
+                @click.stop="speakWord(current.word_key, { sourceId: speechSource })"
               >
                 🔊
               </button>
@@ -280,7 +287,7 @@ onMounted(() => {
                   </template>
                 </span>
                 <span class="example" v-if="s.example || s.example_translation">
-                  <span class="example-en" v-if="s.example">
+                  <span class="example-en" v-if="s.example?.trim()">
                     <span
                       v-for="(t, i) in exampleTokens(s)"
                       :key="i"
@@ -288,6 +295,10 @@ onMounted(() => {
                       :style="t.count ? reviewColorStyle(t.count, reviewColors) : undefined"
                       @click="onTokenClick($event, t)"
                     >{{ t.text }}</span>
+                    <button type="button" class="speak-btn example-speak" aria-label="朗读例句"
+                      :disabled="isSpeechLoading(`example:${s.example.trim()}`, speechSource)"
+                      @click.stop="speakExample(s.example, { sourceId: speechSource })"
+                    >{{ isSpeechLoading(`example:${s.example.trim()}`, speechSource) ? '…' : '🔊' }}</button>
                   </span>
                   <span class="example-trans" v-if="s.example_translation">{{ s.example_translation }}</span>
                 </span>
@@ -331,6 +342,8 @@ onMounted(() => {
 </template>
 
 <style scoped>
+.example-speak { margin-left: 6px; font-size: 13px; vertical-align: baseline; }
+.example-speak:disabled { cursor: wait; opacity: 0.5; }
 .flashcards {
   max-width: 520px;
   margin: 0 auto;

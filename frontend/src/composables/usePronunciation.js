@@ -1,35 +1,58 @@
-// 单词发音播放：请求后端 /api/pronounce/{wordKey} 拿豆包 TTS 合成的音频。
-// 豆包语音是唯一读音来源——未配置或合成失败时明确提示，不做任何本地合成回退。
+// Word audio is persisted by the server; example audio lives only for the current playback.
+import { reactive } from 'vue'
 import { ElMessage } from 'element-plus'
 import { getToken } from '@/api/client'
+import { createAudioPlayback } from '@/utils/audioPlayback'
 
-let activeAudio = null
+export const speechState = reactive({ status: 'idle', target: '', sourceId: '' })
+const player = createAudioPlayback({
+  fetchAudio: (url, options) => fetch(url, options),
+  createAudio: (url) => new Audio(url),
+  urls: URL,
+  onState: (state) => Object.assign(speechState, state),
+  onError: (message) => ElMessage.error(message),
+})
 
-export async function speakWord(wordKey) {
-  if (!wordKey) return
-  try {
-    const token = getToken()
-    const res = await fetch(`/api/pronounce/${encodeURIComponent(wordKey)}`, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-    })
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}))
-      ElMessage.error(data.error || '发音失败')
-      return
-    }
-    const blob = await res.blob()
-    if (activeAudio) {
-      activeAudio.pause()
-    }
-    const url = URL.createObjectURL(blob)
-    const audio = new Audio(url)
-    activeAudio = audio
-    audio.play().catch((err) => {
-      // 浏览器自动播放策略拦截非用户手势触发的播放（如展示新卡片时自动朗读），
-      // 这不是发音失败，不提示报错；手动点击喇叭触发的播放失败才提示。
-      if (err?.name !== 'NotAllowedError') ElMessage.error('播放失败')
-    })
-  } catch {
-    ElMessage.error('发音失败，请稍后重试')
-  }
+/** Attach the existing application Bearer token without exposing provider credentials. */
+function authHeaders() {
+  const token = getToken()
+  return token ? { Authorization: `Bearer ${token}` } : {}
 }
+
+/** Play a canonical word using the shared server cache. Options identify the owning view and auto-play intent. */
+export function speakWord(wordKey, options = {}) {
+  if (!wordKey) return
+  const key = wordKey.trim().toLowerCase()
+  return player.play({
+    target: `word:${key}`,
+    sourceId: options.sourceId || `word:${key}`,
+    automatic: options.automatic || false,
+    url: `/api/pronounce/${encodeURIComponent(key)}`,
+    request: { headers: authHeaders() },
+  })
+}
+
+/** Synthesize only the English original, requesting no browser or server persistence. */
+export function speakExample(text, options = {}) {
+  if (!text?.trim()) return
+  const original = text.trim()
+  return player.play({
+    target: `example:${original}`,
+    sourceId: options.sourceId || 'example',
+    url: '/api/pronounce/example',
+    request: {
+      method: 'POST',
+      cache: 'no-store',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: original }),
+    },
+  })
+}
+
+/** Report the loading state only for the matching target and view. */
+export function isSpeechLoading(target, sourceId) {
+  return speechState.status === 'loading' && speechState.target === target && speechState.sourceId === sourceId
+}
+
+/** Release an owning view's player, leaving another view's newer playback intact. */
+export function stopSpeech(sourceId) { player.stop(sourceId) }

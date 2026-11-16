@@ -22,12 +22,11 @@ type deepseekConfig struct {
 	Accounting    *billing.Service `json:"-"`
 }
 
-// ttsConfig 豆包（火山引擎）语音合成的配置，可在后台动态修改。
-// APIKey 是 BytePlus Seed Speech 的 API Key，放到请求的 X-Api-Key 头里（见 doubao.go）。
+// ttsConfig uses the shared DeepSeek credentials and an independent voice choice.
 type ttsConfig struct {
-	APIKey    string `json:"tts_api_key"`
-	Cluster   string `json:"tts_cluster"`
-	VoiceType string `json:"tts_voice_type"`
+	APIKey  string
+	BaseURL string
+	VoiceID string
 }
 
 // reviewColorConfig 是管理员配置的次数渐变。它和 DeepSeek/TTS 配置共用 settings 表，
@@ -38,10 +37,13 @@ type reviewColorConfig struct {
 	Segments   int    `json:"segments"`
 }
 
-// complete 判断 TTS 配置是否齐全——三项都非空才认为已配置，缺任一项都视为「未配置」。
+// complete validates credentials and the two supported voices; lookup's Enabled flag does not apply.
 func (c ttsConfig) complete() bool {
-	return c.APIKey != "" && c.Cluster != "" && c.VoiceType != ""
+	return c.APIKey != "" && c.BaseURL != "" && validTTSVoice(c.VoiceID)
 }
+
+// validTTSVoice constrains voice IDs to those supported by the official API.
+func validTTSVoice(voice string) bool { return voice == "stella" || voice == "tide" }
 
 const (
 	settingKeyAPIKey        = "deepseek_api_key"
@@ -50,16 +52,11 @@ const (
 	settingKeyThinkingModel = "deepseek_thinking_model"
 	settingKeyEnabled       = "deepseek_enabled"
 
-	settingKeyTTSAPIKey    = "tts_api_key"
-	settingKeyTTSCluster   = "tts_cluster"
-	settingKeyTTSVoiceType = "tts_voice_type"
+	settingKeyTTSVoiceID = "deepseek_tts_voice_id"
 
 	settingKeyReviewColorStart    = "review_color_start"
 	settingKeyReviewColorEnd      = "review_color_end"
 	settingKeyReviewColorSegments = "review_color_segments"
-
-	// legacySettingKeyTTSAppID 旧版误把 API Key 存成了 tts_appid，启动时迁移到 tts_api_key，之后不再读写。
-	legacySettingKeyTTSAppID = "tts_appid"
 
 	// legacySettingKeyModel 旧版单一「模型」配置 key，仅用于启动时迁移到兜底模型，之后不再读写。
 	legacySettingKeyModel = "deepseek_model"
@@ -91,17 +88,11 @@ func (a *App) loadSettings() {
 	a.seedSettingIfMissing(ctx, settingKeyFallbackModel, fallbackDefault)
 	a.seedSettingIfMissing(ctx, settingKeyThinkingModel, getEnv("DEEPSEEK_THINKING_MODEL", ""))
 
-	// 豆包语音合成配置：api_key 默认空（未配置），cluster/voice_type 给内置默认值。
-	// 旧版误把 API Key 存成 tts_appid，这里优先迁移它，避免用户重填。
-	apiKeyDefault := getEnv("TTS_API_KEY", "")
-	if existing, err := a.settings.LoadValues(ctx, []string{legacySettingKeyTTSAppID, settingKeyTTSAPIKey}); err == nil {
-		if existing[settingKeyTTSAPIKey] == "" && existing[legacySettingKeyTTSAppID] != "" {
-			apiKeyDefault = existing[legacySettingKeyTTSAppID]
-		}
+	voice := getEnv("DEEPSEEK_TTS_VOICE_ID", "stella")
+	if !validTTSVoice(voice) {
+		voice = "stella"
 	}
-	a.seedSettingIfMissing(ctx, settingKeyTTSAPIKey, apiKeyDefault)
-	a.seedSettingIfMissing(ctx, settingKeyTTSCluster, getEnv("TTS_CLUSTER", "volcano_tts"))
-	a.seedSettingIfMissing(ctx, settingKeyTTSVoiceType, getEnv("TTS_VOICE_TYPE", "BV001"))
+	a.seedSettingIfMissing(ctx, settingKeyTTSVoiceID, voice)
 	a.seedSettingIfMissing(ctx, settingKeyReviewColorStart, defaultReviewColorStart)
 	a.seedSettingIfMissing(ctx, settingKeyReviewColorEnd, defaultReviewColorEnd)
 	a.seedSettingIfMissing(ctx, settingKeyReviewColorSegments, strconv.Itoa(defaultReviewSegments))
@@ -117,7 +108,7 @@ func (a *App) seedSettingIfMissing(ctx context.Context, name, value string) {
 func (a *App) refreshSettingsCache(ctx context.Context) {
 	values, err := a.settings.LoadValues(ctx, []string{
 		settingKeyAPIKey, settingKeyBaseURL, settingKeyFallbackModel, settingKeyThinkingModel, settingKeyEnabled,
-		settingKeyTTSAPIKey, settingKeyTTSCluster, settingKeyTTSVoiceType,
+		settingKeyTTSVoiceID,
 		settingKeyReviewColorStart, settingKeyReviewColorEnd, settingKeyReviewColorSegments,
 	})
 	if err != nil {
@@ -143,10 +134,14 @@ func (a *App) refreshSettingsCache(ctx context.Context) {
 		ThinkingModel: values[settingKeyThinkingModel],
 		Enabled:       values[settingKeyEnabled] == "true",
 	}
+	voice := values[settingKeyTTSVoiceID]
+	if !validTTSVoice(voice) {
+		voice = "stella"
+	}
 	a.ttsConfig = ttsConfig{
-		APIKey:    values[settingKeyTTSAPIKey],
-		Cluster:   values[settingKeyTTSCluster],
-		VoiceType: values[settingKeyTTSVoiceType],
+		APIKey:  values[settingKeyAPIKey],
+		BaseURL: strings.TrimRight(values[settingKeyBaseURL], "/"),
+		VoiceID: voice,
 	}
 	a.reviewColors = reviewColors
 	a.settingsMu.Unlock()
@@ -160,6 +155,7 @@ func (a *App) getDeepSeekConfig() deepseekConfig {
 	return cfg
 }
 
+// getTTSConfig returns a single shared-credential snapshot without chat billing settings.
 func (a *App) getTTSConfig() ttsConfig {
 	a.settingsMu.RLock()
 	defer a.settingsMu.RUnlock()
@@ -213,16 +209,14 @@ func maskAPIKey(key string) string {
 	return key[:4] + "****" + key[len(key)-4:]
 }
 
-// settingsView 后台管理页展示/保存的配置视图：DeepSeek 查词 + 豆包 TTS 平铺成一张表单。
+// settingsView combines shared DeepSeek credentials, TTS voice and review colors; keys are masked.
 type settingsView struct {
 	Enabled       bool   `json:"enabled"`
 	APIKey        string `json:"api_key"`
 	BaseURL       string `json:"base_url"`
 	FallbackModel string `json:"fallback_model"`
 	ThinkingModel string `json:"thinking_model"`
-	TTSAPIKey     string `json:"tts_api_key"`
-	TTSCluster    string `json:"tts_cluster"`
-	TTSVoiceType  string `json:"tts_voice_type"`
+	TTSVoiceID    string `json:"tts_voice_id"`
 	StartColor    string `json:"start_color"`
 	EndColor      string `json:"end_color"`
 	Segments      int    `json:"segments"`
@@ -233,7 +227,6 @@ func (a *App) maskedSettingsView() settingsView {
 	ds := a.getDeepSeekConfig()
 	ds.APIKey = maskAPIKey(ds.APIKey)
 	tts := a.getTTSConfig()
-	tts.APIKey = maskAPIKey(tts.APIKey)
 	reviewColors := a.getReviewColorConfig()
 	return settingsView{
 		Enabled:       ds.Enabled,
@@ -241,9 +234,7 @@ func (a *App) maskedSettingsView() settingsView {
 		BaseURL:       ds.BaseURL,
 		FallbackModel: ds.FallbackModel,
 		ThinkingModel: ds.ThinkingModel,
-		TTSAPIKey:     tts.APIKey,
-		TTSCluster:    tts.Cluster,
-		TTSVoiceType:  tts.VoiceType,
+		TTSVoiceID:    tts.VoiceID,
 		StartColor:    reviewColors.StartColor,
 		EndColor:      reviewColors.EndColor,
 		Segments:      reviewColors.Segments,
@@ -255,17 +246,15 @@ func (a *App) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 type updateSettingsRequest struct {
-	APIKey        string `json:"api_key"`
-	BaseURL       string `json:"base_url"`
-	FallbackModel string `json:"fallback_model"`
-	ThinkingModel string `json:"thinking_model"`
-	Enabled       bool   `json:"enabled"`
-	TTSAPIKey     string `json:"tts_api_key"`
-	TTSCluster    string `json:"tts_cluster"`
-	TTSVoiceType  string `json:"tts_voice_type"`
-	StartColor    string `json:"start_color"`
-	EndColor      string `json:"end_color"`
-	Segments      int    `json:"segments"`
+	APIKey        string  `json:"api_key"`
+	BaseURL       string  `json:"base_url"`
+	FallbackModel string  `json:"fallback_model"`
+	ThinkingModel string  `json:"thinking_model"`
+	Enabled       bool    `json:"enabled"`
+	TTSVoiceID    *string `json:"tts_voice_id"`
+	StartColor    string  `json:"start_color"`
+	EndColor      string  `json:"end_color"`
+	Segments      int     `json:"segments"`
 }
 
 func (a *App) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
@@ -277,9 +266,6 @@ func (a *App) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	req.BaseURL = strings.TrimSpace(req.BaseURL)
 	req.FallbackModel = strings.TrimSpace(req.FallbackModel)
 	req.ThinkingModel = strings.TrimSpace(req.ThinkingModel)
-	req.TTSAPIKey = strings.TrimSpace(req.TTSAPIKey)
-	req.TTSCluster = strings.TrimSpace(req.TTSCluster)
-	req.TTSVoiceType = strings.TrimSpace(req.TTSVoiceType)
 	reviewColors, err := validatedReviewColorConfig(req.StartColor, req.EndColor, req.Segments)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -297,10 +283,13 @@ func (a *App) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		apiKey = currentDS.APIKey
 	}
 
-	currentTTS := a.getTTSConfig()
-	ttsAPIKey := strings.TrimSpace(req.TTSAPIKey)
-	if ttsAPIKey == "" || ttsAPIKey == maskAPIKey(currentTTS.APIKey) {
-		ttsAPIKey = currentTTS.APIKey
+	voice := a.getTTSConfig().VoiceID
+	if req.TTSVoiceID != nil {
+		voice = strings.TrimSpace(*req.TTSVoiceID)
+		if !validTTSVoice(voice) {
+			writeError(w, http.StatusBadRequest, "请选择有效的语音音色")
+			return
+		}
 	}
 
 	enabledStr := "false"
@@ -314,9 +303,7 @@ func (a *App) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		settingKeyFallbackModel:       req.FallbackModel,
 		settingKeyThinkingModel:       req.ThinkingModel,
 		settingKeyEnabled:             enabledStr,
-		settingKeyTTSAPIKey:           ttsAPIKey,
-		settingKeyTTSCluster:          req.TTSCluster,
-		settingKeyTTSVoiceType:        req.TTSVoiceType,
+		settingKeyTTSVoiceID:          voice,
 		settingKeyReviewColorStart:    reviewColors.StartColor,
 		settingKeyReviewColorEnd:      reviewColors.EndColor,
 		settingKeyReviewColorSegments: strconv.Itoa(reviewColors.Segments),

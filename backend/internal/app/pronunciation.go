@@ -1,109 +1,272 @@
+// Pronunciation shares persistent word audio across users. Examples bypass disk storage entirely.
 package app
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
+	"unicode"
 )
 
-// audioDir 音频文件落盘目录，环境变量 AUDIO_DIR 可配，默认 ./audio（相对后端工作目录）。
-// docker 部署时挂载一个 volume 持久化，避免容器重建后音频丢失。
 var audioDir = getEnv("AUDIO_DIR", "audio")
 
-// audioPath 返回某个单词发音文件的磁盘路径（mp3 格式）。
-// 用 filepath.Base 兜底，防止 wordKey 含路径分隔符导致越界读写。
-func audioPath(wordKey string) string {
-	return filepath.Join(audioDir, filepath.Base(wordKey)+".mp3")
+type wordAudio struct {
+	data []byte
+	mime string
+}
+type ttsJob struct {
+	done  chan struct{}
+	audio wordAudio
+	err   error
 }
 
-// ensureAudioDir 启动时确保音频目录存在。
-func ensureAudioDir() error {
-	return os.MkdirAll(audioDir, 0o755)
+// ensureAudioDir prepares the existing volume and the new WAV subdirectory without touching old files.
+func (a *App) ensureAudioDir() error {
+	return os.MkdirAll(filepath.Join(a.audioDir, "deepseek"), 0o755)
 }
 
-// spawnTTS 后台合成某个单词的发音并落盘：复用 translateSem/translateWG（同 spawnTranslation），
-// 失败静默记日志——不阻塞查词，用户点喇叭时 handlePronounce 会再实时合成兜底。
-func (a *App) spawnTTS(wordKey string) {
-	a.translateWG.Add(1)
+// wavPath uses the canonical word's hash inside the original persistent volume.
+func (a *App) wavPath(wordKey string) string {
+	return filepath.Join(a.audioDir, "deepseek", fmt.Sprintf("%x.wav", sha256.Sum256([]byte(wordKey))))
+}
+
+// readWordAudio prefers historical MP3 without requiring credentials; disk errors are not cache misses.
+func (a *App) readWordAudio(wordKey string) (wordAudio, bool, error) {
+	for _, file := range []struct{ path, mime string }{
+		{filepath.Join(a.audioDir, wordKey+".mp3"), "audio/mpeg"},
+		{a.wavPath(wordKey), "audio/wav"},
+	} {
+		data, err := os.ReadFile(file.path)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return wordAudio{}, false, &ttsFailure{500, "读取单词音频失败，请检查音频存储"}
+		}
+		if len(data) == 0 || file.mime == "audio/wav" && !validWAV(data) {
+			continue
+		}
+		return wordAudio{data, file.mime}, true, nil
+	}
+	return wordAudio{}, false, nil
+}
+
+// startWordTTS merges background and click requests and removes finished jobs instead of retaining results.
+func (a *App) startWordTTS(wordKey string) (*ttsJob, error) {
+	if audio, hit, err := a.readWordAudio(wordKey); hit || err != nil {
+		if err != nil {
+			return nil, err
+		}
+		job := &ttsJob{done: make(chan struct{}), audio: audio}
+		close(job.done)
+		return job, nil
+	}
+	a.ttsMu.Lock()
+	defer a.ttsMu.Unlock()
+	if a.ttsStopping {
+		return nil, &ttsFailure{503, "语音服务正在关闭，请稍后重试"}
+	}
+	if job := a.ttsJobs[wordKey]; job != nil {
+		return job, nil
+	}
+	job := &ttsJob{done: make(chan struct{})}
+	a.ttsJobs[wordKey] = job
+	a.ttsWG.Add(1)
 	go func() {
-		defer a.translateWG.Done()
+		defer a.ttsWG.Done()
 		defer func() {
-			if rec := recover(); rec != nil {
-				log.Printf("后台合成发音任务发生 panic word=%s: %v", wordKey, rec)
+			if recovered := recover(); recovered != nil {
+				job.err = &ttsFailure{500, "语音生成失败，请稍后重试"}
+			}
+			a.ttsMu.Lock()
+			delete(a.ttsJobs, wordKey)
+			close(job.done)
+			a.ttsMu.Unlock()
+			if job.err != nil {
+				log.Printf("单词语音生成失败 word=%s: %v", wordKey, job.err)
 			}
 		}()
+		job.audio, job.err = a.generateWordAudio(wordKey)
+	}()
+	return job, nil
+}
 
-		select {
-		case a.translateSem <- struct{}{}:
-		case <-a.bgCtx.Done():
-			log.Printf("进程正在关闭，取消尚未开始的合成发音任务 word=%s", wordKey)
+// generateWordAudio rechecks cache, synthesizes once, and atomically publishes a completely written WAV.
+func (a *App) generateWordAudio(wordKey string) (wordAudio, error) {
+	if audio, hit, err := a.readWordAudio(wordKey); hit || err != nil {
+		return audio, err
+	}
+	if !a.getTTSConfig().complete() {
+		return wordAudio{}, &ttsFailure{503, "语音合成未配置，请在后台配置 DeepSeek"}
+	}
+	if err := a.ensureAudioDir(); err != nil {
+		return wordAudio{}, &ttsFailure{500, "保存单词音频失败，请检查音频存储"}
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(a.wavPath(wordKey)), ".tts-*.tmp")
+	if err != nil {
+		return wordAudio{}, &ttsFailure{500, "保存单词音频失败，请检查音频存储"}
+	}
+	defer os.Remove(tmp.Name())
+	defer tmp.Close()
+	data, err := a.synthesizeTTS(a.bgCtx, wordKey)
+	if err != nil {
+		return wordAudio{}, err
+	}
+	if _, err = tmp.Write(data); err == nil {
+		err = tmp.Sync()
+	}
+	if err == nil {
+		err = tmp.Close()
+	}
+	if err != nil {
+		return wordAudio{}, &ttsFailure{500, "保存单词音频失败，请检查音频存储"}
+	}
+	if audio, hit, err := a.readWordAudio(wordKey); hit || err != nil {
+		return audio, err
+	}
+	if err = os.Rename(tmp.Name(), a.wavPath(wordKey)); err != nil {
+		return wordAudio{}, &ttsFailure{500, "保存单词音频失败，请检查音频存储"}
+	}
+	return wordAudio{data, "audio/wav"}, nil
+}
+
+// synthesizeTTS limits all upstream speech requests and joins graceful shutdown without caching example audio.
+func (a *App) synthesizeTTS(parent context.Context, text string) ([]byte, error) {
+	a.ttsMu.Lock()
+	if a.ttsStopping {
+		a.ttsMu.Unlock()
+		return nil, &ttsFailure{503, "语音服务正在关闭，请稍后重试"}
+	}
+	a.ttsWG.Add(1)
+	a.ttsMu.Unlock()
+	defer a.ttsWG.Done()
+	ctx, cancel := context.WithTimeout(parent, ttsTimeout)
+	defer cancel()
+	stop := context.AfterFunc(a.bgCtx, cancel)
+	defer stop()
+	select {
+	case a.ttsSem <- struct{}{}:
+		defer func() { <-a.ttsSem }()
+	case <-ctx.Done():
+		return nil, ttsNetworkFailure(ctx, ctx.Err())
+	}
+	return synthesizeSpeech(ctx, text, a.getTTSConfig())
+}
+
+// spawnTTS schedules the same cache-aware job as manual clicks without overwriting existing audio.
+func (a *App) spawnTTS(wordKey string) {
+	wordKey = strings.ToLower(strings.TrimSpace(wordKey))
+	if !wordPattern.MatchString(wordKey) {
+		return
+	}
+	if _, err := a.startWordTTS(wordKey); err != nil {
+		log.Printf("预生成语音失败 word=%s: %v", wordKey, err)
+	}
+}
+
+// handlePronounce returns old/new cached audio or waits on a shared job; waiter cancellation does not cancel saving.
+func (a *App) handlePronounce(w http.ResponseWriter, r *http.Request) {
+	wordKey := strings.ToLower(strings.TrimSpace(r.PathValue("wordKey")))
+	if !wordPattern.MatchString(wordKey) {
+		writeError(w, 400, "请输入有效的英文单词（最多 64 字符）")
+		return
+	}
+	job, err := a.startWordTTS(wordKey)
+	if err != nil {
+		writeTTSFailure(w, err)
+		return
+	}
+	select {
+	case <-job.done:
+		if job.err != nil {
+			writeTTSFailure(w, job.err)
 			return
 		}
-		defer func() { <-a.translateSem }()
-
-		a.synthesizeAndSave(a.bgCtx, wordKey)
-	}()
+		writeAudio(w, job.audio)
+	case <-r.Context().Done():
+		writeTTSFailure(w, ttsNetworkFailure(r.Context(), r.Context().Err()))
+	}
 }
 
-// synthesizeAndSave 合成发音并落盘；配置不全或合成失败只记日志，不向上抛。
-func (a *App) synthesizeAndSave(ctx context.Context, wordKey string) {
-	cfg := a.getTTSConfig()
-	if !cfg.complete() {
-		log.Printf("语音合成未配置，跳过预生成 word=%s", wordKey)
-		return
+// handlePronounceExample validates bounded plain text and emits no-store WAV, never entering word persistence.
+func (a *App) handlePronounceExample(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	r.Body = http.MaxBytesReader(w, r.Body, 8<<10)
+	var req struct {
+		Text string `json:"text"`
 	}
-	audio, err := synthesizeSpeech(ctx, wordKey, cfg)
+	decoder := json.NewDecoder(r.Body)
+	err := decoder.Decode(&req)
+	if err == nil {
+		var extra any
+		trailing := decoder.Decode(&extra)
+		if trailing != io.EOF {
+			if trailing != nil {
+				err = trailing
+			} else {
+				err = errors.New("extra JSON")
+			}
+		}
+	}
 	if err != nil {
-		log.Printf("语音合成失败 word=%s: %v", wordKey, err)
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeError(w, 413, "例句过长")
+			return
+		}
+		writeError(w, 400, "请求格式不正确")
 		return
 	}
-	if err := os.WriteFile(audioPath(wordKey), audio, 0o644); err != nil {
-		log.Printf("写入音频文件失败 word=%s: %v", wordKey, err)
-	}
-}
-
-// handlePronounce 播放单词发音（GET /api/pronounce/{wordKey}）。
-// 磁盘缓存命中直接返回；未命中则实时合成落盘；未配置或合成失败返回明确错误，
-// 前端据此提示用户——豆包语音是唯一读音来源，不做本地合成兜底。
-func (a *App) handlePronounce(w http.ResponseWriter, r *http.Request) {
-	wordKey := r.PathValue("wordKey")
-	if wordKey == "" {
-		writeError(w, http.StatusBadRequest, "单词不能为空")
+	text := strings.TrimSpace(req.Text)
+	if text == "" {
+		writeError(w, 400, "例句不能为空")
 		return
 	}
-
-	// 磁盘缓存命中：直接返回音频，不重新合成。
-	if audio, err := os.ReadFile(audioPath(wordKey)); err == nil {
-		writeAudio(w, audio)
+	characters := 0
+	for _, character := range text {
+		characters++
+		if unicode.Is(unicode.Han, character) {
+			characters++
+		}
+	}
+	if characters > 1000 {
+		writeError(w, 413, "例句过长（最多 1000 个计费字符）")
 		return
 	}
-
-	// 未命中：先检查配置，未配置直接报错（豆包语音是唯一来源，不做本地合成兜底）。
-	cfg := a.getTTSConfig()
-	if !cfg.complete() {
-		writeError(w, http.StatusServiceUnavailable, "语音合成未配置，请在后台管理页配置豆包语音")
-		return
-	}
-	audio, err := synthesizeSpeech(r.Context(), wordKey, cfg)
+	data, err := a.synthesizeTTS(r.Context(), text)
 	if err != nil {
-		log.Printf("实时合成发音失败 word=%s: %v", wordKey, err)
-		writeError(w, http.StatusBadGateway, err.Error())
+		writeTTSFailure(w, err)
 		return
 	}
-	// 合成成功落盘，下次命中缓存
-	if err := os.WriteFile(audioPath(wordKey), audio, 0o644); err != nil {
-		log.Printf("写入音频文件失败 word=%s: %v", wordKey, err)
-	}
-	writeAudio(w, audio)
+	writeAudio(w, wordAudio{data, "audio/wav"})
 }
 
-// writeAudio 以 mp3 的 Content-Type 输出音频字节。
-func writeAudio(w http.ResponseWriter, audio []byte) {
-	w.Header().Set("Content-Type", "audio/mpeg")
+// writeTTSFailure uses the existing JSON contract and suppresses errors for a disconnected caller.
+func writeTTSFailure(w http.ResponseWriter, err error) {
+	if errors.Is(err, context.Canceled) {
+		return
+	}
+	var failure *ttsFailure
+	if errors.As(err, &failure) {
+		writeError(w, failure.status, failure.message)
+		return
+	}
+	writeError(w, 502, "语音合成失败，请稍后重试")
+}
+
+// writeAudio keeps stored bytes intact and emits the correct MP3 or WAV MIME.
+func writeAudio(w http.ResponseWriter, audio wordAudio) {
+	w.Header().Set("Content-Type", audio.mime)
 	w.WriteHeader(http.StatusOK)
-	if _, err := w.Write(audio); err != nil {
+	if _, err := w.Write(audio.data); err != nil {
 		log.Printf("写入音频响应失败: %v", err)
 	}
 }

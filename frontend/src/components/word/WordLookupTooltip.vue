@@ -1,13 +1,15 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, watch } from 'vue'
 import { useWordLookup } from '@/composables/useWordLookup'
-import { speakWord } from '@/composables/usePronunciation'
+import { speakWord, speakExample, stopSpeech, isSpeechLoading } from '@/composables/usePronunciation'
 import { useVocabularyIndex } from '@/composables/useVocabularyIndex'
 import { useReviewColors } from '@/composables/useReviewColors'
 import { tokenizeExample } from '@/utils/highlight'
 import { reviewColorStyle } from '@/utils/reviewLevel'
 
 const { state, close } = useWordLookup()
+const speechSource = 'word-lookup'
+watch(() => [state.open, state.wordKey], () => stopSpeech(speechSource))
 const vocab = useVocabularyIndex()
 const { reviewColors, ensureReviewColors } = useReviewColors()
 
@@ -46,7 +48,10 @@ watch(
   },
 )
 
-onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
+onBeforeUnmount(() => {
+  stopSpeech(speechSource)
+  document.removeEventListener('click', onDocClick)
+})
 onMounted(() => {
   vocab.ensure()
   ensureReviewColors()
@@ -63,7 +68,7 @@ onMounted(() => {
           type="button"
           class="tt-speak"
           :aria-label="`朗读 ${state.word}`"
-          @click.stop="speakWord(state.wordKey)"
+          @click.stop="speakWord(state.wordKey, { sourceId: speechSource })"
         >
           🔊
         </button>
@@ -81,12 +86,15 @@ onMounted(() => {
                 <span class="tt-translation">{{ s.translation }}</span>
               </span>
               <span class="tt-example" v-if="s.example || s.example_translation">
-                <span class="tt-example-en" v-if="s.example"><span
+                <span class="tt-example-en" v-if="s.example?.trim()"><span
                   v-for="(t, ti) in exampleTokens(s.example)"
                   :key="ti"
                   :class="t.count ? 'hl-word' : ''"
                   :style="t.count ? reviewColorStyle(t.count, reviewColors) : undefined"
-                >{{ t.text }}</span></span>
+                >{{ t.text }}</span><button type="button" class="tt-speak example-speak" aria-label="朗读例句"
+                  :disabled="isSpeechLoading(`example:${s.example.trim()}`, speechSource)"
+                  @click.stop="speakExample(s.example, { sourceId: speechSource })"
+                >{{ isSpeechLoading(`example:${s.example.trim()}`, speechSource) ? '…' : '🔊' }}</button></span>
                 <span class="tt-example-trans" v-if="s.example_translation">{{ s.example_translation }}</span>
               </span>
             </div>
@@ -99,6 +107,8 @@ onMounted(() => {
 </template>
 
 <style scoped>
+.example-speak { margin-left: 6px; font-size: 12px; vertical-align: baseline; }
+.example-speak:disabled { cursor: wait; opacity: 0.5; }
 .lookup-tooltip {
   position: fixed;
   z-index: 3000;

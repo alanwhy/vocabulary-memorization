@@ -128,3 +128,9 @@ docker compose -f docker-compose.yml -f docker-compose.production.yml down      
 ## 超管账号
 
 用户名/密码在服务器的 `/root/vocabulary-memorization/.env` 里的 `ADMIN_USERNAME` / `ADMIN_PASSWORD`，首次部署时随机生成，不会被后续更新覆盖。
+
+## DeepSeek 语音迁移的数据保护
+
+继续挂载 `vocabulary-memorization_audio_data` 到 `/app/audio`，旧豆包生成的 `<word_key>.mp3` 原位保留，新单词 WAV 写到 `/app/audio/deepseek/`。例句音频不保存到卷或数据库。更新语音实现无需音频转码或清库，不执行删卷操作，也不修改生产外部卷名称。
+
+语音共用后台 DeepSeek Key/Base URL，默认海星女声；`DEEPSEEK_TTS_VOICE_ID` 仅在首次缺失配置时播种，之后在后台选择 stella/tide。自定义网关需支持 `/v1/tools/tts`。迁移后先验证一条旧 MP3 的播放和字节不变，再生成一个测试新词并重复播放确认复用，最后试听例句并确认无新增持久文件。

@@ -242,7 +242,7 @@ func (a *App) translateAndSave(ctx context.Context, wordID int, wordKey string) 
 		if len(merged) > 0 {
 			completed = a.saveWordSenses(ctx, wordID, wordKey, merged) == nil
 			a.saveDictionarySenses(ctx, wordKey, merged)
-			// 查词成功后后台预生成发音（豆包 TTS），点喇叭时秒响；失败静默，播放时再兜底
+			// 查词成功后预生成 DeepSeek 发音；已有音频复用，失败时可手动点读重试。
 			a.spawnTTS(wordKey)
 			return
 		}

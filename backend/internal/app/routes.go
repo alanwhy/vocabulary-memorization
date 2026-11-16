@@ -13,6 +13,7 @@ const (
 	defaultRequestTimeout  = 10 * time.Second
 	exportRequestTimeout   = 60 * time.Second
 	dictionaryRetryTimeout = 60 * time.Second
+	pronunciationTimeout   = 25 * time.Second
 )
 
 // Handler 返回应用完整的 HTTP 入口。staticDir 由组合根传入，以保持生产工作目录语义并方便测试隔离。
@@ -42,7 +43,8 @@ func (a *App) Handler(staticDir string) http.Handler {
 	mux.HandleFunc("PUT /api/words/{id}/important", withTimeout(defaultRequestTimeout)(a.requireAuth(a.handleSetWordImportant)))
 	mux.HandleFunc("GET /api/flashcards/queue", withTimeout(defaultRequestTimeout)(a.requireAuth(a.handleFlashcardQueue)))
 	mux.HandleFunc("POST /api/flashcards/review", withTimeout(defaultRequestTimeout)(a.requireAuth(a.handleFlashcardReview)))
-	mux.HandleFunc("GET /api/pronounce/{wordKey}", withTimeout(defaultRequestTimeout)(a.requireAuth(a.handlePronounce)))
+	mux.HandleFunc("GET /api/pronounce/{wordKey}", withTimeout(pronunciationTimeout)(a.requireAuth(a.handlePronounce)))
+	mux.HandleFunc("POST /api/pronounce/example", withTimeout(pronunciationTimeout)(a.requireAuth(a.handlePronounceExample)))
 
 	mux.HandleFunc("POST /api/admin/users", withTimeout(defaultRequestTimeout)(a.requireAdmin(a.handleCreateUser)))
 	mux.HandleFunc("GET /api/admin/users", withTimeout(defaultRequestTimeout)(a.requireAdmin(a.handleListUsers)))

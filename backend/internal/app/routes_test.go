@@ -40,6 +40,7 @@ func TestHandlerRegistersExistingAPIRoutes(t *testing.T) {
 		{http.MethodGet, "/api/flashcards/queue", http.StatusUnauthorized},
 		{http.MethodPost, "/api/flashcards/review", http.StatusUnauthorized},
 		{http.MethodGet, "/api/pronounce/example", http.StatusUnauthorized},
+		{http.MethodPost, "/api/pronounce/example", http.StatusUnauthorized},
 		{http.MethodPost, "/api/admin/users", http.StatusUnauthorized},
 		{http.MethodGet, "/api/admin/users", http.StatusUnauthorized},
 		{http.MethodPost, "/api/admin/users/1/reset-password", http.StatusUnauthorized},
@@ -121,5 +122,36 @@ func TestHandlerFallsBackToSPAIndex(t *testing.T) {
 	}
 	if !strings.Contains(recorder.Body.String(), "vocabulary spa") {
 		t.Fatalf("SPA fallback body = %q", recorder.Body.String())
+	}
+}
+
+// TestPronounceFullHTTP verifies both formats and the example contract through real routing/auth middleware.
+func TestPronounceFullHTTP(t *testing.T) {
+	speech, calls := speechTestApp(t, func(w http.ResponseWriter, r *http.Request) { w.Write(sampleWAV()) })
+	sessions := newFakeSessionStore()
+	application := New(Dependencies{Users: newFakeUserStore(), Sessions: sessions}, Config{})
+	defer application.CancelBackground()
+	application.audioDir = speech.audioDir
+	application.ttsConfig = speech.ttsConfig
+	sessions.usersByID[42] = User{ID: 42, Username: "speech-user"}
+	sessions.byToken["speech-token"] = sessionRecord{userID: 42, expiresAt: time.Now().Add(time.Hour)}
+	handler := application.Handler(t.TempDir())
+	for _, request := range []*http.Request{
+		httptest.NewRequest("GET", "/api/pronounce/apple", nil),
+		httptest.NewRequest("POST", "/api/pronounce/example", strings.NewReader(`{"text":"An apple a day."}`)),
+		httptest.NewRequest("GET", "/api/pronounce/apple", nil),
+	} {
+		request.Header.Set("Authorization", "Bearer speech-token")
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, request)
+		if w.Code != 200 || w.Header().Get("Content-Type") != "audio/wav" {
+			t.Fatalf("status=%d headers=%v body=%q", w.Code, w.Header(), w.Body.String())
+		}
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("calls=%d, want word once and example once", calls.Load())
+	}
+	if !application.WaitBackground(time.Second) {
+		t.Fatal("unfinished speech job")
 	}
 }

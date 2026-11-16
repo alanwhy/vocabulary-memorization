@@ -121,6 +121,13 @@ type App struct {
 	dsConfig     deepseekConfig
 	ttsConfig    ttsConfig
 	reviewColors reviewColorConfig
+	// TTS jobs are shared by canonical word; completed example audio is never retained.
+	audioDir    string
+	ttsMu       sync.Mutex
+	ttsJobs     map[string]*ttsJob
+	ttsSem      chan struct{}
+	ttsWG       sync.WaitGroup
+	ttsStopping bool
 
 	// bgCtx 是所有后台任务（后台查词 goroutine）共用的生命周期 context，
 	// 进程收到关闭信号时被 cancel，正在等待中的任务据此提前退出。
@@ -158,5 +165,8 @@ func New(deps Dependencies, cfg Config) *App {
 		bgCtx:        bgCtx,
 		bgCancel:     bgCancel,
 		translateSem: make(chan struct{}, maxConcurrentTranslations),
+		audioDir:     audioDir,
+		ttsJobs:      make(map[string]*ttsJob),
+		ttsSem:       make(chan struct{}, 5),
 	}
 }

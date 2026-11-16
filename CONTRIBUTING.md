@@ -93,7 +93,9 @@ npm run dev
 | `ADMIN_USERNAME` / `ADMIN_PASSWORD` | `admin` / 随机 | 只在**库里一个超管都没有**时生效，之后改这两个值不会改已有账号的密码 |
 | `COOKIE_SECURE` | `false` | 走 HTTPS 的环境才需要设 `true`，本地 http 下设了会导致 Cookie 存不下、登录失败 |
 | `MAX_CONCURRENT_TRANSLATIONS` | 5 | 后台查词的并发上限（信号量） |
-| `DEEPSEEK_API_KEY` / `DEEPSEEK_BASE_URL` / `DEEPSEEK_MODEL` | 空 / `https://api.deepseek.com` / `deepseek-v4-flash` | **只在 `settings` 表里没有这条记录时**（即数据库第一次初始化）被种进数据库，之后改环境变量无效，要在后台管理页面改 |
+| `DEEPSEEK_API_KEY` / `DEEPSEEK_BASE_URL` / `DEEPSEEK_FALLBACK_MODEL` | 空 / `https://api.deepseek.com` / `deepseek-v4-flash` | **只在 `settings` 表里没有这条记录时**（即数据库第一次初始化）被种进数据库，之后改环境变量无效，要在后台管理页面改 |
+| `DEEPSEEK_TTS_VOICE_ID` | `stella` | 首次播种语音音色；仅支持 `stella` / `tide`，之后在后台修改；共用 DeepSeek Key 和 Base URL |
+| `AUDIO_DIR` | `audio` | 旧 MP3 和新单词 WAV 所在目录；容器仍挂载原音频卷，例句音频不保存 |
 
 `.env` 在 `.gitignore` 里，不要提交。它只被 `docker compose` 读取，`go run` 不会自动加载。
 
@@ -105,9 +107,12 @@ cd backend
 go vet ./...            # 静态检查
 go test ./...           # 全部 Go 单元测试（不连数据库，秒级）
 go test -run TestParsePagination ./...
+go test -race ./internal/app -run 'TestPronounce|TestTTS'   # 缓存并发与关闭
+
 
 # 前端
 cd frontend
+node --test src/utils/audioPlayback.test.js  # 播放乱序、防重与临时音频释放
 npm run lint            # oxlint + eslint，带 --fix
 npm run build           # 产物进 dist/（Docker 构建时会拷到 backend/static/）
 npm run preview         # 本地预览构建产物
@@ -209,3 +214,11 @@ func migrateUsersLastLoginColumn(db *sql.DB) {
 | 前端改了代码但页面没变 | 用的是方式 A（Docker），产物构建进镜像了，要 `--build` 重建；或者浏览器缓存，`Cmd+Shift+R` |
 | `npm ci` 在服务器上超时 | 见 DEPLOYMENT.md，`Dockerfile` 里已配 npmmirror / goproxy.cn 镜像 |
 | 新词一直显示「暂无释义」 | 没配 DeepSeek Key，Google 兜底接口在国内连不通，重试耗尽后留空 |
+
+### 语音接口与音频兼容
+
+`GET /api/pronounce/{wordKey}` 先返回历史 MP3，再查新 WAV；缺失时通过 DeepSeek TTS 合成，保存成功后返回。新 WAV 存在原目录的 `deepseek/` 子目录，文件名为标准词键的 SHA-256，不按用户重复保存。测试必须使用临时目录，不能清理真实音频。
+
+`POST /api/pronounce/example` 接受 `{ "text": "英文例句" }`，返回 `audio/wav` 并设置 `Cache-Control: no-store`；不调用单词保存路径。请求体限制 8 KiB，文本限制 1,000 个计费字符。语音接口总预算 25 秒，上游预算 20 秒，共用独立并发上限 5；没有自动重试或供应商回退。
+
+前端共用播放器通过来源和请求序号阻止过期音频播放，结束/切换时释放 Blob URL。真实音质、听感及页面交互仍需手动验收；mock 测试与构建不能代替试听。
