@@ -35,16 +35,20 @@ SSH 命令显式带 `-p 7339`，rsync 显式带 `-e 'ssh -p 7339'`，使发布�
 # 1. 本机改代码、commit、push 到 GitHub（正常走 git 工作流，仓库是唯一代码源头）
 git push origin main
 
-# 2. rsync 同步到服务器，排除凭据、备份和迁移记录
+# 2. 从已推送的提交导出快照，避免未提交或未跟踪文件进入生产
+vocab_release_dir=$(mktemp -d /tmp/vocabulary-release.XXXXXX)
+git archive HEAD | tar -x -C "$vocab_release_dir"
+
+# 3. rsync 快照，排除凭据、备份和迁移记录
 rsync -avz -e 'ssh -p 7339' --exclude='.git' --exclude='.env' --exclude='.codegraph' --exclude='node_modules' --exclude='backups' --exclude='compose.migrated.json' \
-  /Users/wuhaoyuan/personal_code/vocabulary-memorization/ \
+  "$vocab_release_dir"/ \
   root@123.56.219.4:/root/vocabulary-memorization/
 
-# 3. 服务器上重新构建并启动
-ssh -p 7339 root@123.56.219.4 "cd /root/vocabulary-memorization && docker compose -f docker-compose.yml -f docker-compose.production.yml up -d --build"
+# 4. 先构建前端，再构建后端并启动，避免两个阶段同时占用小内存实例
+ssh -p 7339 root@123.56.219.4 "cd /root/vocabulary-memorization && docker build --target frontend-builder -f backend/Dockerfile . && docker compose -f docker-compose.yml -f docker-compose.production.yml up -d --no-deps --build backend"
 ```
 
-首次部署才需要执行 `./deploy.sh`（会自动生成 `.env` 里的随机数据库密码和超管密码），之后更新代码只需要上面第 2、3 步，`.env` 不会被覆盖。同步不加 `--delete`，保留服务器上的迁移记录和其他运维文件；迁移到新机器时还需单独迁移 `.env`、MySQL 与音频数据卷。
+首次部署才需要执行 `./deploy.sh`（会自动生成 `.env` 里的随机数据库密码和超管密码），之后更新按上面的快照同步与分阶段构建步骤执行，`.env` 不会被覆盖。同步不加 `--delete`，保留服务器上的迁移记录和其他运维文件；迁移到新机器时还需单独迁移 `.env`、MySQL 与音频数据卷。
 
 ## 涉及数据库结构变更时：先备份，再部署，再验证迁移结果
 
@@ -121,7 +125,8 @@ cd /root/vocabulary-memorization
 docker compose -f docker-compose.yml -f docker-compose.production.yml ps               # 查看容器状态
 docker compose -f docker-compose.yml -f docker-compose.production.yml logs -f backend  # 后端日志
 docker compose -f docker-compose.yml -f docker-compose.production.yml logs -f mysql    # 数据库日志
-docker compose -f docker-compose.yml -f docker-compose.production.yml up -d --build    # 更新代码后构建启动
+docker build --target frontend-builder -f backend/Dockerfile .                         # 先生成前端缓存层
+docker compose -f docker-compose.yml -f docker-compose.production.yml up -d --no-deps --build backend  # 再构建并更新后端
 docker compose -f docker-compose.yml -f docker-compose.production.yml down             # 停止服务（数据卷保留）
 ```
 
@@ -134,3 +139,11 @@ docker compose -f docker-compose.yml -f docker-compose.production.yml down      
 继续挂载 `vocabulary-memorization_audio_data` 到 `/app/audio`，旧豆包生成的 `<word_key>.mp3` 原位保留，新单词 WAV 写到 `/app/audio/deepseek/`。例句音频不保存到卷或数据库。更新语音实现无需音频转码或清库，不执行删卷操作，也不修改生产外部卷名称。
 
 语音共用后台 DeepSeek Key/Base URL，默认海星女声；`DEEPSEEK_TTS_VOICE_ID` 仅在首次缺失配置时播种，之后在后台选择 stella/tide。自定义网关需支持 `/v1/tools/tts`。迁移后先验证一条旧 MP3 的播放和字节不变，再生成一个测试新词并重复播放确认复用，最后试听例句并确认无新增持久文件。
+
+## 小内存生产实例的构建检查
+
+2026-11-16 的 2.0.0 发布中，远端同时构建前后端时出现服务器无响应；经用户授权普通重启后恢复，分阶段构建成功。该实例为 2 vCPU / 2 GiB，系统实测内存约 1673 MiB，已有 1 GiB Swap。VNC 显示历史内存耗尽与内核任务阻塞日志，但此次卡住的具体根因未完整确认。
+
+更新前先检查 `free -m`、现有 Swap 和磁盘空间。先构建 frontend-builder 生成缓存，再执行完整后端构建，避免前后端同时编译。本次使用已有 Swap。实例处于重启、停止或启动流程时，等当前云端任务结束再执行下一步，避免重复操作产生任务冲突。
+
+快照 rsync 保留服务器其他文件，源码删除的文件需要单独核对；本次仅移除了明确废弃的 `backend/internal/app/doubao.go` 和 `doubao_test.go`，音频数据卷继续复用。实际发布结果见 [2.0.0 发布记录](docs/ai/DeepSeek语音迁移/04-release.md)。

@@ -199,9 +199,9 @@ func migrateUsersLastLoginColumn(db *sql.DB) {
 2. Commit message：首行 `类型: 中文摘要`（`feat:` / `fix:` / `docs:` / `refactor:`），改动多的话空一行后列要点。参考 `git log`。
 3. 发版时三处一起改：
    - `CHANGELOG.md` 加一个版本条目（`Added` / `Fixed` / `Changed` / `Security` 分段，中文）
-   - `frontend/src/views/HomeView.vue` 底部的 footer 版本号
-   - `frontend/package.json` 的 `version`；改完跑一次 `npm install --package-lock-only` 同步 lockfile（Docker 构建用 `npm ci`，两者版本不一致会构建失败）
-4. 部署：`git push origin main` 之后按 [DEPLOYMENT.md](DEPLOYMENT.md) 走：通过 SSH 7339 端口 rsync 到 `root@123.56.219.4:/root/vocabulary-memorization/`，再执行 `docker compose -f docker-compose.yml -f docker-compose.production.yml up -d --build`，复用迁移后的生产数据卷。**这次改动涉及表结构变更时，先在服务器上 `mysqldump` 备份，再部署，再验证新列/新索引是否补上。**
+   - `frontend/src/views/HomeView.vue` 自动读取包版本，保持该绑定，不手工写死版本号
+   - `frontend/package.json` 的 `version`，以及 `frontend/package-lock.json` 的根包版本元数据；保留依赖版本（Docker 构建用 `npm ci`）
+4. 部署：`git push origin main` 之后按 [DEPLOYMENT.md](DEPLOYMENT.md) 走：通过 SSH 7339 端口将提交快照 rsync 到 `root@123.56.219.4:/root/vocabulary-memorization/`，先执行 `docker build --target frontend-builder -f backend/Dockerfile .`，再执行 `docker compose -f docker-compose.yml -f docker-compose.production.yml up -d --no-deps --build backend`，复用迁移后的生产数据卷。**这次改动涉及表结构变更时，先在服务器上 `mysqldump` 备份，再部署，再验证新列/新索引是否补上。**
 
 ## 常见坑
 

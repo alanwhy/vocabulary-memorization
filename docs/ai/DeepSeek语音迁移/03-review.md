@@ -1,5 +1,7 @@
 # DeepSeek 语音迁移实现与验证记录
 
+生产发布已经完成，结果与恢复过程见 [04-release.md](04-release.md)；本文件保留实现阶段的验证记录，真实听感与 UI 仍待用户验收。
+
 任务状态以 [01-spec.md](01-spec.md) 为准；实现计划和契约见 [02-plan.md](02-plan.md)、[02b-design.md](02b-design.md)。
 
 阶段记录：GPT-6（具体变体未暴露）；2026-11-16 08:18:26–08:30:11，Asia/Shanghai；规范 `@sw/dev-skills@2.0.0`。
