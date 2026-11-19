@@ -41,7 +41,7 @@
 
 2026-11-20 用户显式调用 quick-release，并选择生产环境、无任务号。版本按新增兼容能力由 2.0.0 升至 2.1.0，同步 package.json、package-lock.json、CHANGELOG 与 README；提交和推送目标为 origin/main。部署按 DEPLOYMENT.md 先推送，再从提交快照 rsync，远端先构建 frontend-builder、再构建并更新 backend；保留生产凭据和已有数据卷，不包含未跟踪的 pnpm-lock.yaml。本任务无后端或数据库变更，不触发迁移备份步骤。
 
-开发阶段的测试和本地隔离页面结果见上文；发布阶段不重复本机构建/测试，不进行线上冒烟或功能验收。实际推送与远端部署结果由本次发布对话反馈，用户业务验收仍待执行。
+开发阶段的测试和本地隔离页面结果见上文；发布阶段不重复本机构建/测试，不进行线上冒烟或功能验收。实际推送与远端部署进度见 [04-release.md](04-release.md)：代码已推送、远端前端构建成功，应用更新因 SSH 握手重置受阻；用户业务验收仍待执行。
 
 bootstrap 只返回 legacy-needs-confirmation，未改原 AGENTS.md；原项目分层声明是示例模板，未当作已确认边界使用。
 
