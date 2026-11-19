@@ -25,10 +25,12 @@ const {
   doneCount,
   groupResults,
   groupCounts,
+  retryCount,
   current,
   finished,
   allDone,
   loadQueue,
+  restartGroup,
   ensureQueue,
   flip,
   rate,
@@ -193,7 +195,7 @@ onMounted(() => {
     <section v-else-if="finished" class="group-result" aria-label="本组复习结果">
       <div class="state done result-heading">
         <p>本组完成 🎉</p>
-        <p class="sub">本组背完 {{ groupResults.length }} 个单词，累计 {{ doneCount }} 个</p>
+        <p class="sub">本轮背完 {{ groupResults.length }} 个单词，累计复习 {{ doneCount }} 次</p>
       </div>
 
       <div class="rating-summary" role="list" aria-label="本组认识情况">
@@ -220,7 +222,13 @@ onMounted(() => {
         <p v-else class="result-empty">本组没有{{ group.resultLabel }}的单词</p>
       </section>
 
-      <button class="reload-btn" @click="loadQueue">再来一组</button>
+      <div class="result-actions">
+        <button v-if="retryCount" class="reload-btn retry-btn" :disabled="submitting" @click="restartGroup">
+          当前组再来一次（{{ retryCount }}）
+        </button>
+        <button class="reload-btn" :disabled="submitting" @click="loadQueue">再来一组</button>
+      </div>
+      <p v-if="retryCount" class="retry-hint">只复习本轮不认识和模糊的单词</p>
     </section>
 
     <div v-else-if="!current" class="state">
@@ -499,9 +507,24 @@ onMounted(() => {
   color: var(--muted);
   font-size: 14px;
 }
-.group-result .reload-btn {
-  align-self: center;
+.result-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 12px;
+}
+.result-actions .reload-btn {
   margin-top: 0;
+}
+.retry-btn {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.retry-hint {
+  margin: -8px 0 0;
+  text-align: center;
+  color: var(--muted);
+  font-size: 13px;
 }
 
 /* 3D 翻转：外层提供透视，内层负责 rotateY，前后两面子叠在同一 grid 格 */

@@ -16,6 +16,21 @@ const props = defineProps({
 })
 const emit = defineEmits(['archive', 'unarchive', 'delete', 'retry', 'set-important', 'corrected'])
 const correcting = ref(false)
+const meaningsRevealed = ref(false)
+const meaningsHidden = computed(() =>
+  (props.mode === 'archived' || props.word.archived) && !meaningsRevealed.value,
+)
+watch(() => [props.word.id, props.word.archived, props.mode], () => {
+  meaningsRevealed.value = false
+})
+
+/** 首次点击遮罩中文时仅揭示本卡，捕获阶段拦截原有的重要释义标记。 */
+function onMeaningClick(event) {
+  if (!meaningsHidden.value || !event.target.closest('.meaning-text, .example-trans, .ref-meaning')) return
+  meaningsRevealed.value = true
+  event.stopPropagation()
+}
+
 const speechSource = computed(() => `word-card:${props.word.id}`)
 watch(speechSource, (_, previous) => stopSpeech(previous))
 watch(() => props.word.word_key, () => stopSpeech(speechSource.value))
@@ -113,7 +128,14 @@ function openLookup(e, word) {
         <span class="time">{{ formatTime(word.last_reviewed_at) }}</span>
       </div>
     </div>
-    <div class="word-body">
+    <div class="word-body" :class="{ 'meanings-hidden': meaningsHidden }" @click.capture="onMeaningClick">
+      <button
+        v-if="meaningsHidden && validSenses.length && !word.translating && !hasError"
+        type="button"
+        class="meaning-reveal"
+        :aria-label="`查看 ${word.display_word} 的中文释义`"
+        @click="meaningsRevealed = true"
+      >点击查看中文释义</button>
       <div class="senses" v-if="word.translating">
         <div class="sense"><span class="translation pending">查词中...</span></div>
       </div>
@@ -126,7 +148,7 @@ function openLookup(e, word) {
       <div class="senses" v-else-if="validSenses.length">
         <div class="sense" v-for="(s, idx) in validSenses" :key="idx">
           <span class="pos" v-if="s.pos">{{ s.pos }}</span>
-          <span class="translation">
+          <span class="translation meaning-text" :aria-hidden="meaningsHidden || undefined">
             <template v-for="(g, gi) in glossItems(s)" :key="gi">
               <span v-if="gi > 0">；</span><span
                 class="gloss"
@@ -149,7 +171,7 @@ function openLookup(e, word) {
                 @click.stop="speakExample(s.example, { sourceId: speechSource })"
               >{{ isSpeechLoading(`example:${s.example.trim()}`, speechSource) ? '…' : '🔊' }}</button>
             </span>
-            <span class="example-trans" v-if="s.example_translation">{{ s.example_translation }}</span>
+            <span class="example-trans" v-if="s.example_translation" :aria-hidden="meaningsHidden || undefined">{{ s.example_translation }}</span>
           </span>
         </div>
       </div>
@@ -161,7 +183,7 @@ function openLookup(e, word) {
           <span class="enrich-label">词根词缀：</span>{{ rootAffix }}
         </span>
         <span v-for="g in enrichGroups" :key="g.label">
-          <span class="enrich-label">{{ g.label }}：</span><span v-for="(r, i) in g.refs" :key="i">{{ i > 0 ? '、' : '' }}<span class="lookup-word" :class="{ 'known-word': vocab.lookup(r.word.toLowerCase()) }" @click="openLookup($event, r.word)">{{ r.word }}</span>{{ r.rest }}</span>
+          <span class="enrich-label">{{ g.label }}：</span><span v-for="(r, i) in g.refs" :key="i">{{ i > 0 ? '、' : '' }}<span class="lookup-word" :class="{ 'known-word': vocab.lookup(r.word.toLowerCase()) }" @click="openLookup($event, r.word)">{{ r.word }}</span><span class="ref-meaning" :aria-hidden="meaningsHidden || undefined">{{ r.rest }}</span></span>
         </span>
       </div>
     </div>
@@ -251,6 +273,24 @@ function openLookup(e, word) {
   flex-direction: column;
   gap: 4px;
   min-width: 0;
+}
+.meaning-reveal {
+  align-self: flex-start;
+  padding: 2px 0;
+  border: none;
+  background: none;
+  color: var(--accent);
+  font-size: 12px;
+  cursor: pointer;
+}
+.meaning-reveal:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+.meanings-hidden :is(.meaning-text, .example-trans, .ref-meaning) {
+  filter: blur(5px);
+  user-select: none;
+  cursor: pointer;
 }
 .senses {
   display: flex;

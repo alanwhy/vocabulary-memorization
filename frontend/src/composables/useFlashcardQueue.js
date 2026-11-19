@@ -24,6 +24,19 @@ const groupCounts = computed(() => ({
   fuzzy: groupResults.value.filter((result) => result.rating === 'fuzzy').length,
   good: groupResults.value.filter((result) => result.rating === 'good').length,
 }))
+const retryCount = computed(() => groupCounts.value.again + groupCounts.value.fuzzy)
+
+/** 完成本轮后按原顺序重练不认识/模糊的词；无候选或忙碌时不改变队列，不发请求。 */
+function restartGroup() {
+  if (!finished.value || submitting.value || !retryCount.value) return
+  cards.value = groupResults.value
+    .filter((result) => result.rating === 'again' || result.rating === 'fuzzy')
+    .map((result) => result.word)
+  index.value = 0
+  flipped.value = false
+  groupResults.value = []
+  error.value = ''
+}
 
 // 翻转过渡时长（ms），需与 .flip-inner 的 transition 时长保持一致
 const FLIP_MS = 500
@@ -122,10 +135,12 @@ export function useFlashcardQueue() {
     doneCount,
     groupResults,
     groupCounts,
+    retryCount,
     current,
     finished,
     allDone,
     loadQueue,
+    restartGroup,
     ensureQueue,
     flip,
     rate,
