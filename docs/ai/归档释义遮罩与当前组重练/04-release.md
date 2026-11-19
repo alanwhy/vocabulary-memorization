@@ -1,12 +1,13 @@
 # 2.1.0 发布进度
 
-时间：2026-11-20 07:53 +08:00。用户调用 quick-release，明确选择生产环境、无任务号；飞书文档仍不归档。
+时间：2026-11-20 07:53 记录中断，07:55–07:56 +08:00 继续并完成部署。用户调用 quick-release，明确选择生产环境、无任务号，随后要求使用 ego-browser 直接处理恢复；飞书文档仍不归档。
 
 ## 结果
 
 - 版本：2.0.0 → 2.1.0，依据是新增兼容的当前组重练能力，另含归档词中文释义遮罩。
 - 代码提交：`f83c667eb2690d8e259c377dcfbca363a0b2a294`，标题 `feat: 增加归档释义遮罩和闪卡当前组重练`；已推送 origin/main，并通过 git ls-remote 核对一致。
-- 生产发布尚未完成。已同步代码快照并成功构建远端 frontend-builder；随后应用容器更新命令的 SSH 握手被服务器重置，未进入远端执行。两次只读状态检查（含等待 30 秒后的检查）同样失败，当前服务器和容器状态未能确认。
+- 生产部署已完成。初次同步与前端构建成功后，应用更新因 SSH 握手重置中断；用户要求继续处理时 SSH 已恢复，无须重启服务器或修改 SSH 配置。确认源码与缓存后，完成应用镜像构建及容器替换，退出码 0。
+- 当前运行镜像：`sha256:ffde23b03e2b77342106f6c4d1c0c3801c2cd85290fde94237fe04596ecf603f`；backend 为 running、restarts=0，MySQL healthy。数据库和音频卷保持原卷。
 
 ## 已完成步骤与证据
 
@@ -17,15 +18,15 @@
 5. 服务器上的 package.json、package-lock.json 及三处功能文件 SHA-256 均与本地提交快照一致。此次无后端/数据库变更，无须新增迁移备份。
 6. 远端 `docker build --target frontend-builder -f backend/Dockerfile .` 退出码 0：安装 271 个锁定依赖，frontend@2.1.0 构建 2212 个模块，镜像层导出成功，ID 为 `sha256:0b3e2a96d091af61b998367cd5d08c61ec22c61300d9fc218a64a9bc88e60513`。有常见的大体积 chunk 提示，无构建失败。
 
-## 中断位置
+## 初次中断与恢复
 
-待执行的应用更新命令：
+初次未进入远端、随后 SSH 恢复后实际成功执行的应用更新命令：
 
 ```bash
 ssh -p 7339 root@123.56.219.4 'cd /root/vocabulary-memorization && docker compose -f docker-compose.yml -f docker-compose.production.yml up -d --no-deps --build backend'
 ```
 
-实际连接结果（退出码 255）：
+初次连接结果（退出码 255）：
 
 ```text
 kex_exchange_identification: read: Connection reset by peer
@@ -34,11 +35,14 @@ Connection reset by 123.56.219.4 port 7339
 
 握手即失败，未在结果不明时重复执行容器更新；随后仅尝试只读 uptime/free/docker ps 也失败。不能根据此错误认定内存耗尽或服务器宕机，根因未确认。未自动重启服务器、回滚、改配置或清理镜像/数据。
 
-## 恢复条件与后续
+## 恢复与部署完成证据
 
-- 先恢复 SSH 7339 的可用性；必要时由用户在云控制台检查服务器及 SSH 服务。
-- 恢复后先读取容器、内存、磁盘、现有镜像和源码版本，确认发布状态，再继续上述应用构建与更新。
-- 不再次升版；前端缓存构建已完成且代码已推送。运行容器的最终镜像、启动结果与生产版本仍待确认。
-- 本发布阶段未重复本机构建/测试，未执行线上 HTTP 冒烟或业务验收；开发阶段验证详见 03-review.md。
+- 使用 ego-browser 打开云控制台检查入口时，并行只读 SSH 已恢复可用，服务器 uptime 为 3 天 22 小时左右，原 backend/MySQL 容器仍运行；云控制台停留登录页，没有登录、重启或改配置，浏览器任务空间已关闭。SSH 中断的根因未确认，不能归因于内存耗尽。
+- 恢复后 available 内存约 608 MiB，Swap 仍未使用；源码五个关键文件的 SHA-256 和前端缓存镜像 ID 与中断前一致，两个既有外部卷均存在。
+- 实际执行上述 Compose 命令退出码 0；前端 npm ci/build 和 Go 后端编译均命中既有缓存，只有最终静态资源层更新。新镜像构建完成，backend 容器 Recreated → Started。
+- 容器检查显示实际运行镜像 ID 与本次构建一致，启动时间 `2026-11-20 07:55:37 +08:00`，状态 running、restarts=0；MySQL 保持 Up 3 days (healthy)。
+- 挂载检查确认 backend 使用 `vocabulary-memorization_audio_data`，MySQL 使用 `vocabulary-memorization_mysql_data`，未新建空卷替代旧数据。
+- 在容器内读取发布产物，确认 `FlashcardView-hwTamLfh.js` 存在并包含“当前组再来一次”，`WordList-BlkxbwNR.css` 包含 `meaning-reveal`，`HomeView-D1JtlG2o.js` 包含 `2.1.0`。这是部署产物检查，不等于真实业务验收。
+- 本发布阶段未重复本机构建/测试，未执行线上 HTTP 冒烟或业务验收；开发阶段验证详见 03-review.md。用户仍需登录生产环境手动验收两项功能。
 
 本文件为发布过程记录，后续单独提交不改变已同步代码提交对应的运行时代码。用户实际功能验收保持待执行。
